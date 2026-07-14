@@ -26,20 +26,20 @@ export function renderView(view) {
     <section class="hero">
       <div>
         <p class="eyebrow">Packa</p>
-        <h2>HTTPS och Dropbox-synken fungerar. Din riktiga data är fortfarande orörd.</h2>
-        <p>App Folder, säker inloggning och synk från två lokala webborigins samt den publicerade GitHub Pages-adressen är verifierade mot Dropbox-kontot. Nästa kontroll är den installerade appen på iPhone och Mac.</p>
+        <h2>Installerad iPhone–Mac-synk fungerar. Din riktiga data är fortfarande orörd.</h2>
+        <p>Två lokala webborigins, den publicerade GitHub Pages-sidan och de installerade apparna på iPhone och Mac har synkat syntetiska operationer genom samma Dropbox App Folder.</p>
       </div>
-      <span class="hero-badge">Dropbox live · HTTPS</span>
+      <span class="hero-badge">iPhone + Mac · verifierat</span>
     </section>
     <div class="grid">
       <section class="card span-4"><div class="metric">0</div><div class="metric-label">skarpa dataändringar</div></section>
-      <section class="card span-4"><div class="metric">3</div><div class="metric-label">separata webborigins</div></section>
+      <section class="card span-4"><div class="metric">5</div><div class="metric-label">verifierade appmiljöer</div></section>
       <section class="card span-4"><div class="metric">124</div><div class="metric-label">automatiska prov</div></section>
       <section class="card span-8">
         <h3>Verifieringen hittills</h3>
         <ol class="steps">
           <li><b>Lokal först</b><br>Ändringar sparas före nätverk och kan alltid köras om säkert.</li>
-          <li><b>Tre instanser</b><br>Två lokala och en publicerad HTTPS-origin synkar genom samma Dropbox-mapp med separata IndexedDB- och OAuth-miljöer.</li>
+          <li><b>Fem miljöer</b><br>Två lokala webborigins, publicerad webb, installerad iPhone och installerad Mac har synkat med separata lokala lager.</li>
           <li><b>Dropbox</b><br>App Folder, PKCE, cursor, longpoll, 401 och rate-limit har kontraktstestats.</li>
           <li><b>Återhämtning</b><br>Snapshot, läsbart arkiv och manifest-sist ger säker ny enhet.</li>
         </ol>
@@ -48,7 +48,7 @@ export function renderView(view) {
         <h3>Kvar innan skarp funktion</h3>
         <ul class="shell-list">
           <li>Skarp historikimport <span>övergången</span></li>
-          <li>Installerad iPhone–Mac <span>återstår</span></li>
+          <li>Skarp dataaktivering <span>separat beslut</span></li>
           <li>Skarpt gränssnitt <span>nästa byggsteg</span></li>
         </ul>
         <div class="sync-test">
