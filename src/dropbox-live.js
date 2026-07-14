@@ -10,7 +10,7 @@ import {
 
 export const DROPBOX_CLIENT_ID = '1eivtm3plbhvy9b';
 const DEVICE_KEY = 'packa:live-test-device';
-const TEST_DB = 'packa-dropbox-live-test';
+const REAL_DB = 'packa-live-v1';
 
 let activeSession = null;
 
@@ -52,22 +52,29 @@ export async function beginDropboxLiveTest({
   return authorization;
 }
 
-async function runSyntheticProbe({ accessToken, indexedDB = globalThis.indexedDB, localStorage = globalThis.localStorage, crypto = globalThis.crypto }) {
-  const db = await openPackaDB({ indexedDB, name: TEST_DB });
-  const store = new IndexedDBStore(db);
-  const deviceId = liveDeviceId({ storage: localStorage, crypto });
-  const repository = await new Repository({ store, deviceId }).init();
-  const transport = new DropboxTransport({ accessToken, id: 'dropbox-live-test' });
-  const syncEngine = new SyncEngine({ repository, transport, batchSize: 50 });
-  const probe = await repository.setField('sync_probe', `probe:${deviceId}`, 'last_seen_at', new Date().toISOString());
+async function runRealSync({
+  accessToken,
+  repository = null,
+  indexedDB = globalThis.indexedDB,
+  localStorage = globalThis.localStorage,
+  crypto = globalThis.crypto
+}) {
+  let resolvedRepository = repository;
+  if (!resolvedRepository) {
+    const db = await openPackaDB({ indexedDB, name: REAL_DB });
+    const store = new IndexedDBStore(db);
+    const deviceId = liveDeviceId({ storage: localStorage, crypto });
+    resolvedRepository = await new Repository({ store, deviceId }).init();
+  }
+  const transport = new DropboxTransport({ accessToken, id: 'dropbox-real' });
+  const syncEngine = new SyncEngine({ repository: resolvedRepository, transport, batchSize: 250 });
   const result = await syncEngine.syncOnce();
-  activeSession = { transport, repository, syncEngine, expiresAt: null };
+  activeSession = { transport, repository: resolvedRepository, syncEngine, expiresAt: null };
   return {
-    deviceId,
-    opId: probe.op_id,
     uploadedOps: result.uploadedOps,
     downloadedOps: result.downloadedOps,
-    cursorReset: result.cursorReset
+    cursorReset: result.cursorReset,
+    repository: resolvedRepository
   };
 }
 
@@ -78,6 +85,7 @@ export async function completeDropboxLiveTest({
   localStorage = globalThis.localStorage,
   indexedDB = globalThis.indexedDB,
   crypto = globalThis.crypto,
+  repository = null,
   fetchImpl = (...args) => globalThis.fetch(...args)
 } = {}) {
   if (!isDropboxCallback(location)) return null;
@@ -87,8 +95,9 @@ export async function completeDropboxLiveTest({
     storage: sessionStorage,
     fetchImpl
   });
-  const result = await runSyntheticProbe({
+  const result = await runRealSync({
     accessToken: token.access_token,
+    repository,
     indexedDB,
     localStorage,
     crypto
@@ -100,4 +109,9 @@ export async function completeDropboxLiveTest({
 
 export function hasActiveDropboxSession() {
   return Boolean(activeSession);
+}
+
+export async function syncActiveDropboxSession() {
+  if (!activeSession) return null;
+  return activeSession.syncEngine.syncOnce();
 }

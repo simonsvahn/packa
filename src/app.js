@@ -1,6 +1,13 @@
 import { createDemoWorkspace } from './core-demo.js';
+import { createRealWorkspace } from './real-workspace.js';
 import { VIEW_META, normalizeView, renderView } from './views.js';
-import { beginDropboxLiveTest, completeDropboxLiveTest, isDropboxCallback } from './dropbox-live.js';
+import {
+  beginDropboxLiveTest,
+  completeDropboxLiveTest,
+  hasActiveDropboxSession,
+  isDropboxCallback,
+  syncActiveDropboxSession
+} from './dropbox-live.js';
 
 const shell = document.getElementById('app-shell');
 const viewRoot = document.getElementById('view');
@@ -9,10 +16,11 @@ const kicker = document.getElementById('view-kicker');
 
 let currentView = normalizeView(location.hash);
 let coreWorkspace = null;
+let realWorkspace = null;
 const runtime = {
   dropboxAuthorized: false,
   syncStatus: navigator.onLine === false ? 'offline' : 'local_saved',
-  detail: 'Ingen skarp data är ansluten.',
+  detail: 'Anslut Dropbox för att hämta dina befintliga resor.',
   error: ''
 };
 
@@ -20,6 +28,7 @@ const ui = {
   newTripOpen: false,
   newTripTemplates: new Set(['Basresa']),
   customRowOpen: false,
+  historyTripId: null,
   filters: { search: '', activities: new Set(), functions: new Set() },
   showBags: true,
   hidePacked: false,
@@ -74,10 +83,11 @@ function connectionText(compact = false) {
 function updateSyncUi() {
   document.querySelectorAll('[data-sync-detail]').forEach(el => { el.textContent = runtime.detail; });
   document.querySelectorAll('[data-action="connect-dropbox"]').forEach(button => {
+    const realData = Boolean(currentCore()?.real);
     button.disabled = runtime.syncStatus === 'syncing';
     button.textContent = runtime.syncStatus === 'syncing'
-      ? 'Ansluter…'
-      : (runtime.dropboxAuthorized ? 'Kör nytt isolerat synktest' : 'Anslut Dropbox och kör isolerat synktest');
+      ? 'Synkar privata resor…'
+      : (runtime.dropboxAuthorized || realData ? 'Synka privata resor med Dropbox' : 'Anslut Dropbox och hämta mina resor');
   });
   updateConnectionState();
 }
@@ -105,8 +115,13 @@ async function mutateCore(mutation, { nextView = currentView } = {}) {
   try {
     await mutation();
     runtime.error = '';
+    if (hasActiveDropboxSession() && currentCore()?.real) {
+      setSyncState('syncing', 'Ändringen är lokalt sparad och synkas nu…', { authorized: true });
+      const result = await syncActiveDropboxSession();
+      setSyncState('synced', `Synkad. ${result.uploadedOps} lokala ändringar skickades och ${result.downloadedOps} fjärändringar hämtades.`, { authorized: true });
+    }
   } catch (error) {
-    console.error('Demoändringen stoppades.', error);
+    console.error('Ändringen stoppades.', error);
     runtime.error = error.message;
   }
   showView(nextView);
@@ -128,6 +143,11 @@ document.addEventListener('click', async event => {
     return;
   }
   if (action === 'open-new-trip') {
+    const core = currentCore();
+    if (core?.real && ![...ui.newTripTemplates].some(template => core.templates.includes(template))) {
+      ui.newTripTemplates.clear();
+      if (core.templates[0]) ui.newTripTemplates.add(core.templates[0]);
+    }
     ui.newTripOpen = true;
     showView('resor');
     return;
@@ -151,6 +171,16 @@ document.addEventListener('click', async event => {
     coreWorkspace.selectTrip(actionTarget.dataset.tripId);
     ui.customRowOpen = false;
     showView(actionTarget.dataset.targetView || 'planera');
+    return;
+  }
+  if (action === 'open-history') {
+    ui.historyTripId = actionTarget.dataset.tripId;
+    showView('resor');
+    return;
+  }
+  if (action === 'close-history') {
+    ui.historyTripId = null;
+    showView('resor');
     return;
   }
   if (action === 'copy-trip') {
@@ -186,7 +216,7 @@ document.addEventListener('click', async event => {
   }
   if (action === 'quantity') {
     const next = Number(actionTarget.dataset.next);
-    if (next === 0 && !confirmAction('Antal 0 tar bort raden från testresan. Fortsätta?')) return;
+    if (next === 0 && !confirmAction('Antal 0 tar bort raden från resan. Fortsätta?')) return;
     await mutateCore(() => coreWorkspace.setQuantity(actionTarget.dataset.itemId, next));
     return;
   }
@@ -227,7 +257,7 @@ document.addEventListener('click', async event => {
     return;
   }
   if (action === 'finish-trip') {
-    if (!confirmAction('Avsluta testresan och markera den som klar?')) return;
+    if (!confirmAction('Avsluta resan och markera den som klar?')) return;
     await mutateCore(() => coreWorkspace.setTripStatus('complete'), { nextView: 'resor' });
     return;
   }
@@ -290,10 +320,11 @@ export async function registerServiceWorker() {
 }
 
 try {
-  coreWorkspace = await createDemoWorkspace();
+  realWorkspace = await createRealWorkspace();
+  coreWorkspace = realWorkspace.hasData() ? realWorkspace : await createDemoWorkspace();
 } catch (error) {
-  console.error('Den syntetiska testytan kunde inte starta.', error);
-  runtime.error = `Testytan kunde inte starta: ${error.message}`;
+  console.error('Packas lokala datalager kunde inte starta.', error);
+  runtime.error = `Datalagret kunde inte starta: ${error.message}`;
 }
 
 showView(currentView, { updateHash: !location.hash });
@@ -301,28 +332,34 @@ updateConnectionState();
 registerServiceWorker();
 
 if (isDropboxCallback()) {
-  setSyncState('syncing', 'Verifierar Dropbox och kör ett isolerat syntetiskt test…');
-  completeDropboxLiveTest()
-    .then(result => {
+  setSyncState('syncing', 'Verifierar Dropbox och hämtar dina privata resor…');
+  completeDropboxLiveTest({ repository: realWorkspace?.repository })
+    .then(async result => {
       if (!result) return;
+      realWorkspace = realWorkspace || await createRealWorkspace();
+      await realWorkspace.init();
+      if (!realWorkspace.hasData()) throw new Error('Dropbox-synken slutfördes men ingen master hittades');
+      coreWorkspace = realWorkspace;
+      ui.historyTripId = null;
       setSyncState(
         'synced',
-        `Syntetiskt synktest klart. ${result.uploadedOps} lokal op laddades upp och ${result.downloadedOps} fjärrops lästes säkert. Testresorna ligger fortfarande bara lokalt.`,
+        `Dina resor är hämtade. ${result.downloadedOps} privata operationer lästes och ${result.uploadedOps} lokala ändringar skickades.`,
         { authorized: true }
       );
+      showView('resor');
     })
     .catch(error => {
-      console.error('Dropbox live-test stoppades.', error);
+      console.error('Dropbox-synken stoppades.', error);
       history.replaceState(null, '', `${new URL('./', location.href).href}#resor`);
-      setSyncState('action_required', `Dropbox-testet stoppades: ${error.message}`);
+      setSyncState('action_required', `Dropbox-synken stoppades: ${error.message}`);
     });
 }
 
 window.__PACKA__ = Object.freeze({
   get view() { return currentView; },
-  phase: 'core-demo',
-  dataConnected: false,
-  demoOnly: true,
+  get phase() { return currentCore()?.real ? 'real-data' : 'core-demo'; },
+  get dataConnected() { return Boolean(currentCore()?.real); },
+  get demoOnly() { return !currentCore()?.real; },
   get demoSnapshot() { return currentCore(); },
   get dropboxAuthorized() { return runtime.dropboxAuthorized; },
   get syncStatus() { return runtime.syncStatus; }

@@ -1,7 +1,7 @@
 export const VIEW_ORDER = ['resor', 'planera', 'packa', 'matris', 'master'];
 
 export const VIEW_META = Object.freeze({
-  resor: { title: 'Resor', kicker: 'Översikt · säker testyta' },
+  resor: { title: 'Resor', kicker: 'Översikt' },
   planera: { title: 'Planera', kicker: 'Resa · vad ska med?' },
   packa: { title: 'Packa', kicker: 'Resa · ta fram och packa' },
   matris: { title: 'Matris', kicker: 'Mac · kurering' },
@@ -27,7 +27,11 @@ const statusLabel = status => ({
   archived: 'Arkiverad'
 }[status] || status);
 
-const demoBoundary = () => `
+const dataBoundary = core => core?.real ? `
+  <div class="demo-boundary real-boundary" role="status">
+    <span aria-hidden="true">✓</span>
+    <div><b>Privat data ansluten</b> Resorna ligger lokalt på enheten och synkas bara genom Packas privata Dropbox App Folder. Ingen personlig data ingår i den publika appkoden.</div>
+  </div>` : `
   <div class="demo-boundary" role="note">
     <span aria-hidden="true">◇</span>
     <div><b>Säker testyta</b> Allt du gör här sparas som syntetiska demo-operationer i en separat lokal databas. Originalmastern och Dropbox-testets databas berörs inte.</div>
@@ -55,7 +59,7 @@ function renderNewTrip(core, ui) {
   return `
     <section class="card new-trip-card" aria-labelledby="new-trip-title">
       <div class="section-heading">
-        <div><p class="eyebrow">Syntetisk resa</p><h3 id="new-trip-title">Ny resa</h3></div>
+        <div><p class="eyebrow">${core.real ? 'Privat resa' : 'Syntetisk resa'}</p><h3 id="new-trip-title">Ny resa</h3></div>
         <button class="quiet-button" type="button" data-action="close-new-trip">Stäng</button>
       </div>
       <form class="new-trip-form" data-form="new-trip">
@@ -68,21 +72,22 @@ function renderNewTrip(core, ui) {
           </div>
         </fieldset>
         <div class="preview-count"><b>${preview.length} artiklar förbockas</b><span>Unionen av valda mallar · antal börjar på 1</span></div>
-        <button class="primary-button fit-button" type="submit">Skapa testresa</button>
+        <button class="primary-button fit-button" type="submit">${core.real ? 'Skapa resa' : 'Skapa testresa'}</button>
       </form>
     </section>`;
 }
 
-function renderTripCard(trip, activeTripId) {
+function renderTripCard(trip, core) {
   const progress = tripProgress(trip);
+  const readOnly = core.real && ['complete', 'archived'].includes(trip.status);
   const target = trip.status === 'packing' ? 'packa' : 'planera';
-  const action = trip.status === 'packing' ? 'Fortsätt packa' : 'Öppna planering';
+  const action = readOnly ? 'Visa innehåll' : (trip.status === 'packing' ? 'Fortsätt packa' : 'Öppna planering');
   return `
-    <article class="trip-card${trip.id === activeTripId ? ' active-trip' : ''}">
+    <article class="trip-card${trip.id === core.activeTripId ? ' active-trip' : ''}">
       <div class="trip-card-main">
         <div class="trip-card-topline">
           <span class="status-pill status-${escapeHtml(trip.status)}">${escapeHtml(statusLabel(trip.status))}</span>
-          <span class="demo-pill">DEMO</span>
+          ${core.syntheticOnly ? '<span class="demo-pill">DEMO</span>' : ''}
         </div>
         <h3>${escapeHtml(trip.name)}</h3>
         <p>${escapeHtml(trip.destination || 'Ingen destination')} · ${escapeHtml((trip.templates || []).join(' + ') || 'Ingen mall')}</p>
@@ -90,48 +95,66 @@ function renderTripCard(trip, activeTripId) {
         <small>${progress.taken} framtagna · ${progress.packed} packade · ${progress.total} rader</small>
       </div>
       <div class="trip-actions">
-        <button class="primary-button fit-button" type="button" data-action="open-trip" data-trip-id="${escapeHtml(trip.id)}" data-target-view="${target}">${action}</button>
+        <button class="primary-button fit-button" type="button" data-action="${readOnly ? 'open-history' : 'open-trip'}" data-trip-id="${escapeHtml(trip.id)}" data-target-view="${target}">${action}</button>
         <button class="secondary-button" type="button" data-action="copy-trip" data-trip-id="${escapeHtml(trip.id)}">Utgå från</button>
       </div>
     </article>`;
 }
 
+function renderHistoryDetail(core, ui) {
+  const trip = core.trips.find(entry => entry.id === ui.historyTripId);
+  if (!trip) return '';
+  const progress = tripProgress(trip);
+  return `
+    <section class="card history-detail" aria-labelledby="history-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Läsläge · ${escapeHtml(statusLabel(trip.status))}</p><h2 id="history-title">${escapeHtml(trip.name)}</h2><p>${escapeHtml(trip.destination || 'Ingen destination')} · ${escapeHtml(trip.startDate || trip.year || '')}</p></div>
+        <button class="quiet-button" type="button" data-action="close-history">Stäng</button>
+      </div>
+      <div class="history-summary"><span><b>${trip.items.length}</b> rader</span><span><b>${progress.taken}</b> framtagna</span><span><b>${progress.packed}</b> packade</span></div>
+      <div class="history-rows">
+        ${trip.items.map(item => `<article class="history-row"><div><b>${escapeHtml(item.nameSnapshot)}</b><small>${escapeHtml(item.person || item.category || '')}</small></div><span>${escapeHtml(item.quantity)}</span><span class="history-state${item.taken ? ' done' : ''}">${item.taken ? '✓' : '–'} Framme</span><span class="history-state${item.packed ? ' done' : ''}">${item.packed ? '✓' : '–'} Packat</span>${item.bag || item.location ? `<small>${escapeHtml([item.bag, item.location].filter(Boolean).join(' · '))}</small>` : '<small></small>'}</article>`).join('')}
+      </div>
+      <div class="history-actions"><button class="secondary-button" type="button" data-action="copy-trip" data-trip-id="${escapeHtml(trip.id)}">Utgå från denna resa</button></div>
+    </section>`;
+}
+
 function renderResor(core, ui, error) {
   const activeTrips = core.trips.filter(trip => !['complete', 'archived'].includes(trip.status));
+  const archivedTrips = core.trips.filter(trip => trip.status === 'archived');
   const totalRows = core.trips.reduce((sum, trip) => sum + trip.items.length, 0);
+  const real = core.real;
   return `
     <section class="hero compact-hero">
       <div>
-        <p class="eyebrow">Etapp 4 · första säkra delen</p>
-        <h2>Nu går det att prova Resor → Planera → Packa.</h2>
-        <p>Din riktiga data är fortfarande orörd. Testresorna använder samma lokala operationslager som den framtida appen, men ligger i en helt egen databas.</p>
+        <p class="eyebrow">${real ? 'Din packhistorik' : 'Etapp 4 · första säkra delen'}</p>
+        <h2>${real ? `${core.trips.length} resor finns nu i Packa.` : 'Nu går det att prova Resor → Planera → Packa.'}</h2>
+        <p>${real ? 'Den pågående resan ligger överst. Arkiverade resor öppnas i skrivskyddat läsläge och kan användas som grund för en ny resa.' : 'Din riktiga data är fortfarande orörd. Testresorna använder samma lokala operationslager som den framtida appen, men ligger i en helt egen databas.'}</p>
       </div>
-      <button class="primary-button fit-button hero-action" type="button" data-action="open-new-trip">+ Ny testresa</button>
+      <button class="primary-button fit-button hero-action" type="button" data-action="open-new-trip">+ ${real ? 'Ny resa' : 'Ny testresa'}</button>
     </section>
-    ${demoBoundary()}
+    ${dataBoundary(core)}
     ${error ? `<div class="error-notice" role="alert">${escapeHtml(error)}</div>` : ''}
     ${renderNewTrip(core, ui)}
+    ${renderHistoryDetail(core, ui)}
     <div class="grid core-metrics">
-      <section class="card span-4"><div class="metric">0</div><div class="metric-label">skarpa dataändringar</div></section>
-      <section class="card span-4"><div class="metric">${activeTrips.length}</div><div class="metric-label">aktiva testresor</div></section>
-      <section class="card span-4"><div class="metric">${totalRows}</div><div class="metric-label">syntetiska resrader</div></section>
+      <section class="card span-4"><div class="metric">${core.trips.length}</div><div class="metric-label">${real ? 'befintliga resor' : 'testresor'}</div></section>
+      <section class="card span-4"><div class="metric">${activeTrips.length}</div><div class="metric-label">${real ? 'pågående resor' : 'aktiva testresor'}</div></section>
+      <section class="card span-4"><div class="metric">${real ? archivedTrips.length : totalRows}</div><div class="metric-label">${real ? 'arkiverade resor' : 'syntetiska resrader'}</div></section>
     </div>
     <div class="resor-layout">
       <section class="trip-list" aria-labelledby="active-trips-title">
-        <div class="section-heading"><div><p class="eyebrow">Arbetsyta</p><h2 id="active-trips-title">Testresor</h2></div></div>
-        ${core.trips.map(trip => renderTripCard(trip, core.activeTripId)).join('') || '<p>Inga testresor ännu.</p>'}
+        <div class="section-heading"><div><p class="eyebrow">Arbetsyta</p><h2 id="active-trips-title">${real ? 'Alla resor' : 'Testresor'}</h2></div></div>
+        ${core.trips.map(trip => renderTripCard(trip, core)).join('') || '<p>Inga resor ännu.</p>'}
       </section>
       <aside class="card safety-card">
-        <h3>Datagränsen är kvar</h3>
+        <h3>${real ? 'Privat och återställbart' : 'Datagränsen är kvar'}</h3>
         <ul class="check-list">
-          <li>Testkatalog med nio påhittade artiklar</li>
-          <li>Egen lokal databas för kärnflödet</li>
-          <li>Ingen import av packlista-data.json</li>
-          <li>Ingen uppladdning av testresor till Dropbox</li>
+          ${real ? `<li>${core.catalog.length} aktiva artiklar finns lokalt</li><li>${totalRows} historiska resrader är inlästa</li><li>Arkiverade resor är skrivskyddade</li><li>V1 och v2 finns kvar som fallback</li>` : '<li>Testkatalog med nio påhittade artiklar</li><li>Egen lokal databas för kärnflödet</li><li>Ingen import av packlista-data.json</li><li>Ingen uppladdning av testresor till Dropbox</li>'}
         </ul>
         <div class="sync-test">
-          <button class="secondary-button full-button" type="button" data-action="connect-dropbox">Anslut Dropbox och kör isolerat synktest</button>
-          <p class="sync-detail" data-sync-detail>Ingen skarp data är ansluten.</p>
+          <button class="secondary-button full-button" type="button" data-action="connect-dropbox">Anslut Dropbox</button>
+          <p class="sync-detail" data-sync-detail>Anslut Dropbox för att hämta eller synka resor.</p>
         </div>
       </aside>
     </div>`;
@@ -241,7 +264,7 @@ function renderCustomForm(ui) {
 
 function renderPlanera(core, ui, error) {
   const trip = core.activeTrip;
-  if (!trip) return `${demoBoundary()}${shellCard('Ingen testresa vald', 'Skapa eller öppna en testresa från Resor först.')}`;
+  if (!trip) return `${dataBoundary(core)}${shellCard('Ingen pågående resa vald', 'Skapa eller öppna en pågående resa från Resor först.')}`;
   const filter = currentFilter(ui);
   const rowsByCatalog = new Map();
   for (const row of trip.items.filter(item => item.catalogId)) {
@@ -256,10 +279,10 @@ function renderPlanera(core, ui, error) {
   const totalSelected = trip.items.reduce((sum, item) => sum + item.quantity, 0);
   return `
     <section class="hero workspace-hero">
-      <div><p class="eyebrow">Syntetisk resa · ${escapeHtml(statusLabel(trip.status))}</p><h2>${escapeHtml(trip.name)}</h2><p>Bestäm vad som ska med. Funktion visas som underrubrik; mallchipsen är bara etiketter.</p></div>
+      <div><p class="eyebrow">${core.real ? 'Privat resa' : 'Syntetisk resa'} · ${escapeHtml(statusLabel(trip.status))}</p><h2>${escapeHtml(trip.name)}</h2><p>Bestäm vad som ska med. Funktion visas som underrubrik; mallchipsen är bara etiketter.</p></div>
       <div class="hero-actions"><span class="hero-badge">${trip.items.length} rader · ${totalSelected} st</span><button class="primary-button fit-button" type="button" data-action="start-packing">Börja packa</button></div>
     </section>
-    ${demoBoundary()}
+    ${dataBoundary(core)}
     ${error ? `<div class="error-notice" role="alert">${escapeHtml(error)}</div>` : ''}
     ${renderFilterRow(core, ui)}
     <div class="list-toolbar"><div><b>Resans lins</b><span>${visibleMatching.length} synliga av ${matching.length}</span></div><button class="secondary-button" type="button" data-action="open-custom-row">+ Egen rad</button></div>
@@ -270,7 +293,7 @@ function renderPlanera(core, ui, error) {
       ${!visibleMatching.length && !customRows.length ? '<div class="empty-state">Inga artiklar matchar filtren.</div>' : ''}
     </section>
     <details class="other-master">
-      <summary>Allt annat i testmastern (${visibleRest.length})</summary>
+      <summary>Allt annat i ${core.real ? 'mastern' : 'testmastern'} (${visibleRest.length})</summary>
       <div class="plan-list">${groupBy(visibleRest, 'category').map(([title, items]) => renderPlanGroup(title, items, rowsByCatalog, trip)).join('') || '<div class="empty-state">Inget mer matchar filtren.</div>'}</div>
     </details>`;
 }
@@ -299,7 +322,7 @@ function renderPackRow(item, tripItems, bags, showBags) {
 
 function renderPacka(core, ui, error) {
   const trip = core.activeTrip;
-  if (!trip) return `${demoBoundary()}${shellCard('Ingen testresa vald', 'Skapa eller öppna en testresa från Resor först.')}`;
+  if (!trip) return `${dataBoundary(core)}${shellCard('Ingen pågående resa vald', 'Skapa eller öppna en pågående resa från Resor först.')}`;
   const filter = currentFilter(ui);
   const total = trip.items.length;
   const taken = trip.items.filter(item => item.taken).length;
@@ -310,10 +333,10 @@ function renderPacka(core, ui, error) {
     .filter(item => !ui.hideTaken || !item.taken);
   return `
     <section class="pack-progress" aria-label="Packprogress">
-      <div><p class="eyebrow">${escapeHtml(trip.name)} · Simon</p><h2>${packed} av ${total} rader packade</h2><p>${taken} framtagna · progress räknar alltid alla rader</p></div>
+      <div><p class="eyebrow">${escapeHtml(trip.name)} · ${escapeHtml((trip.persons || []).join(' + ') || 'Resa')}</p><h2>${packed} av ${total} rader packade</h2><p>${taken} framtagna · progress räknar alltid alla rader</p></div>
       <div class="progress-ring" style="--progress:${percent * 3.6}deg"><b>${percent}%</b></div>
     </section>
-    ${demoBoundary()}
+    ${dataBoundary(core)}
     ${error ? `<div class="error-notice" role="alert">${escapeHtml(error)}</div>` : ''}
     ${renderFilterRow(core, ui)}
     <section class="pack-toolbar" aria-label="Visningsinställningar">
@@ -324,26 +347,26 @@ function renderPacka(core, ui, error) {
       <button class="secondary-button" type="button" data-action="open-custom-row">+ Egen rad</button>
     </section>
     ${renderCustomForm(ui)}
-    <datalist id="bag-locations"><option value="Topplock"><option value="Innerfack"><option value="Klädpåse"><option value="Teknikpåse"></datalist>
+    <datalist id="bag-locations">${[...(core.pouches || []), 'Topplock', 'Innerfack', 'Klädpåse', 'Teknikpåse'].map(value => `<option value="${escapeHtml(value)}">`).join('')}</datalist>
     <section class="pack-list" aria-label="Packrader">
       ${groupBy(visible, 'category').map(([title, items]) => `<section class="pack-group"><div class="pack-group-heading"><h2>${escapeHtml(title)}</h2><span>${items.filter(item => item.packed).length}/${items.length}</span></div>${items.map(item => renderPackRow(item, trip.items, core.bags, ui.showBags)).join('')}</section>`).join('') || '<div class="empty-state">Inga rader matchar visningen. Progressen ovan räknar fortfarande hela resan.</div>'}
     </section>
-    <div class="finish-bar"><span><b>${packed}/${total} packade</b><small>Detta är fortfarande en testresa.</small></span><button class="primary-button fit-button" type="button" data-action="finish-trip"${packed < total ? ' disabled' : ''}>Avsluta testresa</button></div>`;
+    <div class="finish-bar"><span><b>${packed}/${total} packade</b><small>${core.real ? 'Ändringar sparas lokalt först.' : 'Detta är fortfarande en testresa.'}</small></span><button class="primary-button fit-button" type="button" data-action="finish-trip"${packed < total ? ' disabled' : ''}>Avsluta ${core.real ? 'resa' : 'testresa'}</button></div>`;
 }
 
 export function renderView(view, { core = null, ui = {}, error = '' } = {}) {
-  if (!core) return `${demoBoundary()}${shellCard('Testytan startar', 'Det lokala operationslagret förbereds.')}`;
+  if (!core) return `${dataBoundary(core)}${shellCard('Packa startar', 'Det lokala operationslagret förbereds.')}`;
   if (view === 'resor') return renderResor(core, ui, error);
   if (view === 'planera') return renderPlanera(core, ui, error);
   if (view === 'packa') return renderPacka(core, ui, error);
 
   const copy = {
     matris: ['Matris kommer i nästa del', 'Kärnflödena Resor, Planera och Packa byggs och verifieras först. Matrisen kommer därefter som en egen Mac-yta.'],
-    master: ['Master kommer i nästa del', 'Testkatalogen är medvetet liten och syntetisk. Den riktiga artikelmastern aktiveras först efter en separat migreringsgrind.']
+    master: ['Masterytan kommer i nästa del', core.real ? `${core.catalog.length} aktiva artiklar är redan säkert inlästa, men redigeringsytan byggs och verifieras separat.` : 'Testkatalogen är medvetet liten och syntetisk. Den riktiga artikelmastern aktiveras först efter en separat migreringsgrind.']
   }[view];
   return `
-    <section class="hero"><div><p class="eyebrow">Nästa etapp</p><h2>${copy[0]}</h2><p>${copy[1]}</p></div><span class="hero-badge">Skarp data avstängd</span></section>
-    ${demoBoundary()}
+    <section class="hero"><div><p class="eyebrow">Nästa etapp</p><h2>${copy[0]}</h2><p>${copy[1]}</p></div><span class="hero-badge">${core.real ? 'Privat data ansluten' : 'Skarp data avstängd'}</span></section>
+    ${dataBoundary(core)}
     <div style="height:16px"></div>
     ${shellCard(copy[0], copy[1])}`;
 }
