@@ -1,3 +1,4 @@
+import { createDemoWorkspace } from './core-demo.js';
 import { VIEW_META, normalizeView, renderView } from './views.js';
 import { beginDropboxLiveTest, completeDropboxLiveTest, isDropboxCallback } from './dropbox-live.js';
 
@@ -7,10 +8,22 @@ const title = document.getElementById('view-title');
 const kicker = document.getElementById('view-kicker');
 
 let currentView = normalizeView(location.hash);
+let coreWorkspace = null;
 const runtime = {
   dropboxAuthorized: false,
   syncStatus: navigator.onLine === false ? 'offline' : 'local_saved',
-  detail: 'Ingen skarp data är ansluten.'
+  detail: 'Ingen skarp data är ansluten.',
+  error: ''
+};
+
+const ui = {
+  newTripOpen: false,
+  newTripTemplates: new Set(['Basresa']),
+  customRowOpen: false,
+  filters: { search: '', activities: new Set(), functions: new Set() },
+  showBags: true,
+  hidePacked: false,
+  hideTaken: false
 };
 
 const STATUS_LABEL = {
@@ -28,13 +41,17 @@ function setCurrentLinks(view) {
   });
 }
 
+function currentCore() {
+  return coreWorkspace?.snapshot() || null;
+}
+
 export function showView(value, { updateHash = true } = {}) {
   const view = normalizeView(value);
   const meta = VIEW_META[view];
   currentView = view;
   title.textContent = meta.title;
   kicker.textContent = meta.kicker;
-  viewRoot.innerHTML = renderView(view);
+  viewRoot.innerHTML = renderView(view, { core: currentCore(), ui, error: runtime.error });
   viewRoot.dataset.view = view;
   setCurrentLinks(view);
   document.title = `${meta.title} · Packa`;
@@ -60,7 +77,7 @@ function updateSyncUi() {
     button.disabled = runtime.syncStatus === 'syncing';
     button.textContent = runtime.syncStatus === 'syncing'
       ? 'Ansluter…'
-      : (runtime.dropboxAuthorized ? 'Kör nytt syntetiskt test' : 'Anslut Dropbox och kör test');
+      : (runtime.dropboxAuthorized ? 'Kör nytt isolerat synktest' : 'Anslut Dropbox och kör isolerat synktest');
   });
   updateConnectionState();
 }
@@ -79,18 +96,183 @@ export function updateConnectionState() {
   document.querySelectorAll('.status-dot').forEach(el => { el.classList.toggle('offline', offline); });
 }
 
-document.addEventListener('click', event => {
-  const connect = event.target.closest('[data-action="connect-dropbox"]');
-  if (connect) {
-    event.preventDefault();
+function confirmAction(message) {
+  return typeof window.confirm !== 'function' || window.confirm(message);
+}
+
+async function mutateCore(mutation, { nextView = currentView } = {}) {
+  if (!coreWorkspace) return;
+  try {
+    await mutation();
+    runtime.error = '';
+  } catch (error) {
+    console.error('Demoändringen stoppades.', error);
+    runtime.error = error.message;
+  }
+  showView(nextView);
+}
+
+function toggleSetValue(set, value) {
+  if (set.has(value)) set.delete(value);
+  else set.add(value);
+}
+
+document.addEventListener('click', async event => {
+  const actionTarget = event.target.closest('[data-action]');
+  const action = actionTarget?.dataset.action;
+  if (action) event.preventDefault();
+
+  if (action === 'connect-dropbox') {
     setSyncState('syncing', 'Öppnar Dropbox-auktorisering…');
     beginDropboxLiveTest().catch(error => setSyncState('action_required', error.message));
     return;
   }
+  if (action === 'open-new-trip') {
+    ui.newTripOpen = true;
+    showView('resor');
+    return;
+  }
+  if (action === 'close-new-trip') {
+    ui.newTripOpen = false;
+    showView('resor');
+    return;
+  }
+  if (action === 'toggle-new-template') {
+    toggleSetValue(ui.newTripTemplates, actionTarget.dataset.template);
+    const active = ui.newTripTemplates.has(actionTarget.dataset.template);
+    actionTarget.classList.toggle('active', active);
+    actionTarget.setAttribute('aria-pressed', String(active));
+    const preview = currentCore().catalog.filter(item => item.templates.some(template => ui.newTripTemplates.has(template))).length;
+    const previewLabel = document.querySelector('.preview-count b');
+    if (previewLabel) previewLabel.textContent = `${preview} artiklar förbockas`;
+    return;
+  }
+  if (action === 'open-trip') {
+    coreWorkspace.selectTrip(actionTarget.dataset.tripId);
+    ui.customRowOpen = false;
+    showView(actionTarget.dataset.targetView || 'planera');
+    return;
+  }
+  if (action === 'copy-trip') {
+    const source = currentCore().trips.find(trip => trip.id === actionTarget.dataset.tripId);
+    if (!source) return;
+    await mutateCore(() => coreWorkspace.createTrip({
+      name: `${source.name} – kopia`,
+      destination: source.destination,
+      sourceTripId: source.id
+    }), { nextView: 'planera' });
+    return;
+  }
+  if (action === 'toggle-filter') {
+    const key = actionTarget.dataset.filterKind === 'activity' ? 'activities' : 'functions';
+    toggleSetValue(ui.filters[key], actionTarget.dataset.filterValue);
+    showView(currentView);
+    return;
+  }
+  if (action === 'clear-filters') {
+    ui.filters.search = '';
+    ui.filters.activities.clear();
+    ui.filters.functions.clear();
+    showView(currentView);
+    return;
+  }
+  if (action === 'set-included') {
+    const catalogId = actionTarget.dataset.catalogId;
+    const included = actionTarget.dataset.included === 'true';
+    const rows = currentCore().activeTrip.items.filter(item => item.catalogId === catalogId);
+    if (!included && rows.length > 1 && !confirmAction(`Artikeln är uppdelad på ${rows.length} rader. Ta bort alla delrader?`)) return;
+    await mutateCore(() => coreWorkspace.setIncluded(catalogId, included));
+    return;
+  }
+  if (action === 'quantity') {
+    const next = Number(actionTarget.dataset.next);
+    if (next === 0 && !confirmAction('Antal 0 tar bort raden från testresan. Fortsätta?')) return;
+    await mutateCore(() => coreWorkspace.setQuantity(actionTarget.dataset.itemId, next));
+    return;
+  }
+  if (action === 'open-custom-row') {
+    ui.customRowOpen = true;
+    showView(currentView);
+    return;
+  }
+  if (action === 'close-custom-row') {
+    ui.customRowOpen = false;
+    showView(currentView);
+    return;
+  }
+  if (action === 'start-packing') {
+    await mutateCore(() => coreWorkspace.setTripStatus('packing'), { nextView: 'packa' });
+    return;
+  }
+  if (action === 'toggle-taken') {
+    await mutateCore(() => coreWorkspace.toggleTaken(actionTarget.dataset.itemId));
+    return;
+  }
+  if (action === 'toggle-packed') {
+    await mutateCore(() => coreWorkspace.togglePacked(actionTarget.dataset.itemId));
+    return;
+  }
+  if (action === 'toggle-pack-view') {
+    const key = actionTarget.dataset.packKey;
+    if (['showBags', 'hidePacked', 'hideTaken'].includes(key)) ui[key] = !ui[key];
+    showView('packa');
+    return;
+  }
+  if (action === 'split-item') {
+    await mutateCore(() => coreWorkspace.splitItem(actionTarget.dataset.itemId));
+    return;
+  }
+  if (action === 'merge-items') {
+    await mutateCore(() => coreWorkspace.mergeItems(actionTarget.dataset.mergeKey));
+    return;
+  }
+  if (action === 'finish-trip') {
+    if (!confirmAction('Avsluta testresan och markera den som klar?')) return;
+    await mutateCore(() => coreWorkspace.setTripStatus('complete'), { nextView: 'resor' });
+    return;
+  }
+
   const link = event.target.closest('[data-view-link]');
   if (!link) return;
   event.preventDefault();
+  ui.customRowOpen = false;
   showView(link.dataset.viewLink);
+});
+
+document.addEventListener('submit', async event => {
+  const form = event.target.closest('[data-form]');
+  if (!form) return;
+  event.preventDefault();
+  const values = new FormData(form);
+  if (form.dataset.form === 'new-trip') {
+    await mutateCore(() => coreWorkspace.createTrip({
+      name: values.get('name'),
+      destination: values.get('destination'),
+      templates: [...ui.newTripTemplates]
+    }), { nextView: 'planera' });
+    ui.newTripOpen = false;
+    return;
+  }
+  if (form.dataset.form === 'filter-search') {
+    ui.filters.search = String(values.get('search') || '');
+    showView(currentView);
+    return;
+  }
+  if (form.dataset.form === 'custom-item') {
+    ui.customRowOpen = false;
+    await mutateCore(() => coreWorkspace.addCustomItem(values.get('name')));
+  }
+});
+
+document.addEventListener('change', async event => {
+  const control = event.target.closest('[data-action]');
+  if (!control) return;
+  if (control.dataset.action === 'set-bag') {
+    await mutateCore(() => coreWorkspace.setBag(control.dataset.itemId, control.value));
+  }
+  if (control.dataset.action === 'set-location') {
+    await mutateCore(() => coreWorkspace.setLocation(control.dataset.itemId, control.value));
+  }
 });
 
 window.addEventListener('hashchange', () => showView(location.hash, { updateHash: false }));
@@ -107,6 +289,13 @@ export async function registerServiceWorker() {
   }
 }
 
+try {
+  coreWorkspace = await createDemoWorkspace();
+} catch (error) {
+  console.error('Den syntetiska testytan kunde inte starta.', error);
+  runtime.error = `Testytan kunde inte starta: ${error.message}`;
+}
+
 showView(currentView, { updateHash: !location.hash });
 updateConnectionState();
 registerServiceWorker();
@@ -118,7 +307,7 @@ if (isDropboxCallback()) {
       if (!result) return;
       setSyncState(
         'synced',
-        `Syntetiskt test synkat. ${result.uploadedOps} lokal op laddades upp och ${result.downloadedOps} fjärrops lästes säkert.`,
+        `Syntetiskt synktest klart. ${result.uploadedOps} lokal op laddades upp och ${result.downloadedOps} fjärrops lästes säkert. Testresorna ligger fortfarande bara lokalt.`,
         { authorized: true }
       );
     })
@@ -131,8 +320,10 @@ if (isDropboxCallback()) {
 
 window.__PACKA__ = Object.freeze({
   get view() { return currentView; },
-  phase: 'sync-validation',
+  phase: 'core-demo',
   dataConnected: false,
+  demoOnly: true,
+  get demoSnapshot() { return currentCore(); },
   get dropboxAuthorized() { return runtime.dropboxAuthorized; },
   get syncStatus() { return runtime.syncStatus; }
 });

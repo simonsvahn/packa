@@ -2,7 +2,7 @@
    Cacha endast appskalet. Varken masterdata, Dropbox-svar eller
    framtida arkivexport får någonsin hamna i denna cachelista. */
 const CACHE_PREFIX = 'packa-shell-';
-const CACHE = `${CACHE_PREFIX}2026-07-15-5`;
+const CACHE = `${CACHE_PREFIX}2026-07-15-6`;
 const SHELL = [
   './',
   './index.html',
@@ -13,6 +13,7 @@ const SHELL = [
   './icon-192.png',
   './icon-512.png',
   './src/app.js',
+  './src/core-demo.js',
   './src/views.js',
   './src/data-layer.js',
   './src/dropbox-live.js',
