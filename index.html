@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#18312d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>Packa</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icon-180.png">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#view">Hoppa till innehållet</a>
+  <div class="app-shell" id="app-shell">
+    <aside class="sidebar" aria-label="Huvudmeny">
+      <a class="brand" href="#resor" data-view-link="resor" aria-label="Packa, gå till Resor">
+        <span class="brand-mark" aria-hidden="true">✓</span>
+        <span>Packa</span>
+      </a>
+      <nav class="side-nav" data-nav aria-label="Vyer">
+        <a href="#resor" data-view-link="resor"><span aria-hidden="true">⌂</span>Resor</a>
+        <a href="#planera" data-view-link="planera"><span aria-hidden="true">☷</span>Planera</a>
+        <a href="#packa" data-view-link="packa"><span aria-hidden="true">✓</span>Packa</a>
+        <a href="#matris" data-view-link="matris"><span aria-hidden="true">▦</span>Matris</a>
+        <a href="#master" data-view-link="master"><span aria-hidden="true">≡</span>Master</a>
+      </nav>
+      <div class="sidebar-status">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span data-connection-label>Lokalt sparat · Dropbox ej ansluten</span>
+        <small>Två webborigins synkar · iPhone–Mac återstår</small>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="mobile-header">
+        <a class="brand" href="#resor" data-view-link="resor">
+          <span class="brand-mark" aria-hidden="true">✓</span>
+          <span>Packa</span>
+        </a>
+        <span class="connection-chip" data-connection-label>Dropbox ej ansluten</span>
+      </header>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="view-kicker">Översikt</p>
+          <h1 id="view-title">Resor</h1>
+        </div>
+        <div class="topbar-status" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span data-connection-label>Lokalt sparat · Dropbox ej ansluten</span>
+        </div>
+      </header>
+      <main class="view" id="view" tabindex="-1"></main>
+    </div>
+
+    <nav class="bottom-nav" data-nav aria-label="Mobilvyer">
+      <a href="#resor" data-view-link="resor"><span aria-hidden="true">⌂</span>Resor</a>
+      <a href="#planera" data-view-link="planera"><span aria-hidden="true">☷</span>Planera</a>
+      <a href="#packa" data-view-link="packa"><span aria-hidden="true">✓</span>Packa</a>
+      <a href="#matris" data-view-link="matris"><span aria-hidden="true">▦</span>Matris</a>
+    </nav>
+  </div>
+
+  <noscript>Packa behöver JavaScript för att visa appen.</noscript>
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>

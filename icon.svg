@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Packa">
+  <rect width="512" height="512" rx="112" fill="#18312d"/>
+  <rect x="116" y="92" width="280" height="328" rx="62" fill="#fffdf8"/>
+  <path d="M174 208l43 43 116-116" fill="none" stroke="#d6633f" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M174 318h164" fill="none" stroke="#1f5a4f" stroke-width="30" stroke-linecap="round"/>
+</svg>
