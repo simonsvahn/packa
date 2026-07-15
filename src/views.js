@@ -34,8 +34,8 @@ const statusLabel = status => ({
 
 const dataBoundary = (core, compact = false) => core?.real ? `
   <div class="demo-boundary real-boundary${compact ? ' compact-boundary' : ''}" role="status">
-    <span aria-hidden="true">✓</span>
-    <div><b>Privat data ansluten</b><span class="boundary-copy"> Resorna ligger lokalt på enheten och synkas bara genom Packas privata Dropbox App Folder. Ingen personlig data ingår i den publika appkoden.</span></div>
+    <span aria-hidden="true">🔒</span>
+    <div><b>Visar dina privata resor</b><small data-sync-summary>Dropbox-status läses in…</small><span class="boundary-copy"> Resorna är sparade lokalt på den här enheten. Dropbox-synk visas separat.</span></div>
   </div>` : `
   <div class="demo-boundary${compact ? ' compact-boundary' : ''}" role="note">
     <span aria-hidden="true">◇</span>

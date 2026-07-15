@@ -14,6 +14,17 @@ const shell = document.getElementById('app-shell');
 const viewRoot = document.getElementById('view');
 const title = document.getElementById('view-title');
 const kicker = document.getElementById('view-kicker');
+const ACTIVE_TRIP_KEY = 'packa:active-trip-id';
+const LAST_SYNC_KEY = 'packa:last-successful-dropbox-sync';
+
+function storedLastSyncAt() {
+  try {
+    const value = localStorage.getItem(LAST_SYNC_KEY);
+    return value && Number.isFinite(Date.parse(value)) ? value : null;
+  } catch {
+    return null;
+  }
+}
 
 let currentView = normalizeView(location.hash);
 let coreWorkspace = null;
@@ -22,6 +33,7 @@ const runtime = {
   dropboxAuthorized: false,
   syncStatus: navigator.onLine === false ? 'offline' : 'local_saved',
   detail: 'Anslut Dropbox för att hämta dina befintliga resor.',
+  lastSyncedAt: storedLastSyncAt(),
   error: ''
 };
 
@@ -63,15 +75,6 @@ const ui = {
 
 let pendingRestore = null;
 let backgroundSyncPromise = null;
-const ACTIVE_TRIP_KEY = 'packa:active-trip-id';
-
-const STATUS_LABEL = {
-  offline: 'Offline · lokalt sparat',
-  local_saved: 'Lokalt sparat · Dropbox ej ansluten',
-  syncing: 'Synkar med Dropbox…',
-  synced: 'Synkad med Dropbox',
-  action_required: 'Åtgärd krävs'
-};
 
 function setCurrentLinks(view) {
   document.querySelectorAll('[data-view-link]').forEach(link => {
@@ -126,17 +129,43 @@ export function showView(value, { updateHash = true } = {}) {
 
 function connectionText(compact = false) {
   const status = navigator.onLine === false ? 'offline' : runtime.syncStatus;
-  const full = STATUS_LABEL[status] || STATUS_LABEL.local_saved;
-  if (!compact) return full;
-  if (status === 'offline') return 'Offline';
+  const last = formattedLastSync(compact);
+  if (status === 'offline') return compact ? `Offline${last ? ` · ${last}` : ''}` : `Offline · lokalt sparat${last ? ` · senast synkad ${last}` : ''}`;
   if (status === 'syncing') return 'Synkar…';
-  if (status === 'synced') return 'Synkad';
+  if (status === 'synced') return compact ? `Synkad${last ? ` ${last}` : ''}` : `Dropbox ansluten${last ? ` · senast synkad ${last}` : ''}`;
   if (status === 'action_required') return 'Åtgärd krävs';
-  return 'Dropbox ej ansluten';
+  return compact ? `Ej ansluten${last ? ` · ${last}` : ''}` : `Lokalt sparat · Dropbox ej ansluten${last ? ` · senast synkad ${last}` : ''}`;
+}
+
+function formattedLastSync(compact = false) {
+  if (!runtime.lastSyncedAt) return '';
+  const value = new Date(runtime.lastSyncedAt);
+  if (!Number.isFinite(value.getTime())) return '';
+  return new Intl.DateTimeFormat('sv-SE', compact
+    ? { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }
+    : { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }
+  ).format(value);
+}
+
+function boundarySyncText(compact = false) {
+  const status = navigator.onLine === false ? 'offline' : runtime.syncStatus;
+  const last = formattedLastSync(compact);
+  if (compact) {
+    if (status === 'syncing') return '· Synkar…';
+    if (status === 'action_required') return `· Synkfel${last ? ` · ${last}` : ''}`;
+    if (status === 'offline') return `· Offline${last ? ` · ${last}` : ''}`;
+    return last ? `· ${last}` : '· Ej synkad';
+  }
+  if (status === 'syncing') return 'Dropbox synkar nu.';
+  if (status === 'action_required') return `Dropbox behöver åtgärdas.${last ? ` Senast synkad ${last}.` : ''}`;
+  if (status === 'offline') return `Offline.${last ? ` Senast synkad ${last}.` : ' Ingen lyckad Dropbox-synk har registrerats på den här enheten.'}`;
+  if (runtime.dropboxAuthorized) return last ? `Dropbox är ansluten. Senast synkad ${last}.` : 'Dropbox är ansluten men ingen lyckad synk har registrerats ännu.';
+  return last ? `Dropbox är inte ansluten just nu. Senast synkad ${last}.` : 'Dropbox är inte ansluten just nu. Ingen lyckad synk har registrerats på den här enheten.';
 }
 
 function updateSyncUi() {
   document.querySelectorAll('[data-sync-detail]').forEach(el => { el.textContent = runtime.detail; });
+  document.querySelectorAll('[data-sync-summary]').forEach(el => { el.textContent = boundarySyncText(Boolean(el.closest('.compact-boundary'))); });
   document.querySelectorAll('[data-action="connect-dropbox"]').forEach(button => {
     const realData = Boolean(currentCore()?.real);
     button.disabled = runtime.syncStatus === 'syncing';
@@ -151,6 +180,12 @@ function setSyncState(syncStatus, detail, { authorized = runtime.dropboxAuthoriz
   runtime.syncStatus = syncStatus;
   runtime.detail = detail;
   runtime.dropboxAuthorized = authorized;
+  if (syncStatus === 'synced') {
+    runtime.lastSyncedAt = new Date().toISOString();
+    try { localStorage.setItem(LAST_SYNC_KEY, runtime.lastSyncedAt); } catch {
+      // Tidsstämpeln är hjälpinformation; synkresultatet är fortfarande giltigt.
+    }
+  }
   updateSyncUi();
 }
 
@@ -796,5 +831,6 @@ window.__PACKA__ = Object.freeze({
   get demoOnly() { return !currentCore()?.real; },
   get demoSnapshot() { return currentCore(); },
   get dropboxAuthorized() { return runtime.dropboxAuthorized; },
-  get syncStatus() { return runtime.syncStatus; }
+  get syncStatus() { return runtime.syncStatus; },
+  get lastSyncedAt() { return runtime.lastSyncedAt; }
 });
