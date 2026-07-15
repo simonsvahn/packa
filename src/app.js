@@ -736,10 +736,10 @@ export async function registerServiceWorker() {
     const registration = await navigator.serviceWorker.register('./sw.js', { scope: './' });
     registration.update?.().catch?.(() => {});
     if (hadController && typeof navigator.serviceWorker.addEventListener === 'function') {
+      let reloading = false;
       navigator.serviceWorker.addEventListener('controllerchange', () => {
-        const key = 'packa:sw-reloaded';
-        if (sessionStorage.getItem(key)) return;
-        sessionStorage.setItem(key, '1');
+        if (reloading) return;
+        reloading = true;
         location.reload();
       }, { once: true });
     }
