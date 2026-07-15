@@ -173,6 +173,24 @@ export function hasActiveDropboxSession() {
   return Boolean(activeSession);
 }
 
+export async function getDropboxSyncDiagnostics(repository) {
+  if (!repository?.store?.getAllOps) return null;
+  if (activeSession?.repository === repository) return activeSession.syncEngine.diagnostics();
+  const all = await repository.store.getAllOps();
+  const uploadedSeq = await repository.store.getMeta(`sync:dropbox-real:uploaded_seq:${repository.deviceId}`) ?? 0;
+  const ownOps = all.filter(op => op.device_id === repository.deviceId);
+  const appDevices = [...new Set([repository.deviceId, ...all.map(op => op.device_id)])
+    .values()]
+    .filter(id => /^(?:packa-web-|web-)/.test(id));
+  return {
+    deviceId: repository.deviceId,
+    localSeq: ownOps.reduce((max, op) => Math.max(max, op.seq), 0),
+    uploadedSeq,
+    pendingOps: ownOps.filter(op => op.seq > uploadedSeq).length,
+    knownAppDevices: appDevices.length
+  };
+}
+
 async function refreshActiveDropboxSession({ force = false } = {}) {
   if (!activeSession?.refreshToken) return activeSession;
   if (!force && activeSession.expiresAt && activeSession.expiresAt > Date.now() + TOKEN_EXPIRY_SKEW_MS) return activeSession;

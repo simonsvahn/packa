@@ -108,7 +108,7 @@ function renderTripEditor(core, ui) {
       <fieldset><legend>Personer</legend><div class="chip-row">${(core.persons || []).map(person => `<label class="check-chip"><input type="checkbox" name="persons" value="${escapeHtml(person)}"${trip.persons.includes(person) ? ' checked' : ''}>${escapeHtml(person)}</label>`).join('')}</div></fieldset>
       <fieldset><legend>Malletiketter — ändrar inte resans rader</legend><div class="chip-row">${core.templates.map(template => `<label class="check-chip"><input type="checkbox" name="templates" value="${escapeHtml(template)}"${trip.templates.includes(template) ? ' checked' : ''}>${escapeHtml(template)}</label>`).join('')}</div></fieldset>
       <label class="wide-field">Anteckningar <textarea name="notes" rows="2" maxlength="500">${escapeHtml(trip.notes || '')}</textarea></label>
-      <div class="form-actions wide-field"><button class="primary-button fit-button" type="submit">Spara reseuppgifter</button><button class="danger-button" type="button" data-action="delete-trip">Ta bort resan helt</button></div>
+      <div class="form-actions wide-field"><button class="primary-button fit-button" type="submit">Spara reseuppgifter</button><button class="danger-outline-button" type="button" data-action="delete-trip">Flytta till Nyligen raderade</button></div>
     </form>
   </section>`;
 }
@@ -566,6 +566,12 @@ function renderStatus(core, status = {}, error = '') {
   const dropboxSession = status.dropboxAuthorized
     ? 'Aktiv – automatisk synk är igång'
     : (status.dropboxCredentialStored ? 'Sparad behörighet finns men kunde inte aktiveras' : 'Inte ansluten på den här enheten');
+  const pendingOps = status.pendingOps === null || status.pendingOps === undefined ? 'Läser…' : (status.pendingOps ? `${status.pendingOps} ändringar väntar på uppladdning` : 'Inga ändringar väntar');
+  const lastResult = status.lastUploadedOps === null || status.lastUploadedOps === undefined || status.lastDownloadedOps === null || status.lastDownloadedOps === undefined
+    ? 'Inget resultat i den här sessionen'
+    : `${status.lastUploadedOps} skickade · ${status.lastDownloadedOps} hämtade`;
+  const device = `${status.deviceId ? String(status.deviceId).slice(-8) : 'okänd'}${status.knownAppDevices === null || status.knownAppDevices === undefined ? '' : ` · ${status.knownAppDevices} kända appenheter`}`;
+  const deletedTrips = core.deletedTrips || [];
   return `<section class="hero compact-hero status-hero"><div><p class="eyebrow">Två separata lager</p><h2>Data och appversion.</h2><p>Här ser du om dina privata resor har synkats och om den senaste Packa-versionen körs.</p></div></section>
     ${error ? `<div class="error-notice" role="alert">${escapeHtml(error)}</div>` : ''}
     <div class="status-grid">
@@ -574,6 +580,9 @@ function renderStatus(core, status = {}, error = '') {
         <dl class="status-facts">
           <div><dt>På enheten</dt><dd>${escapeHtml(localData)}</dd></div>
           <div><dt>Senast lyckad synk</dt><dd data-status-last-sync>${escapeHtml(lastSync)}</dd></div>
+          <div><dt>Senaste synkresultat</dt><dd data-status-last-result>${escapeHtml(lastResult)}</dd></div>
+          <div><dt>Väntar lokalt</dt><dd data-status-pending-ops>${escapeHtml(pendingOps)}</dd></div>
+          <div><dt>Den här enheten</dt><dd data-status-device>${escapeHtml(device)}</dd></div>
           <div><dt>Dropbox-anslutning</dt><dd data-status-dropbox-session>${escapeHtml(dropboxSession)}</dd></div>
         </dl>
         <div class="status-actions"><button class="primary-button full-button" type="button" data-action="connect-dropbox" data-sync-label="status">${escapeHtml(syncButton)}</button>${status.dropboxCredentialStored || status.dropboxAuthorized ? '<button class="text-button" type="button" data-action="disconnect-dropbox">Koppla från Dropbox på denna enhet</button>' : ''}</div>
@@ -589,6 +598,7 @@ function renderStatus(core, status = {}, error = '') {
         <p class="status-detail">När en ny version hittas hämtas den och appen laddas om. Dina privata data ligger kvar i det separata lokala datalagret.</p>
       </section>
     </div>
+    ${deletedTrips.length ? `<section class="card status-explainer deleted-trips"><div><p class="eyebrow">Återställbart</p><h2>Nyligen raderade resor</h2><p>De här resorna är synkade som raderade och visas därför inte i Resor. Återställning lägger tillbaka resan och de rader som fanns när den togs bort.</p></div><div class="library-list">${deletedTrips.map(trip => `<article><div><b>${escapeHtml(trip.name)}</b><small>${escapeHtml(trip.createdAt || '')}</small></div><button class="secondary-button" type="button" data-action="restore-deleted-trip" data-trip-id="${escapeHtml(trip.id)}">Återställ</button></article>`).join('')}</div></section>` : ''}
     <section class="card status-explainer"><h2>Vad är vad?</h2><div><p><b>Datasynk</b> jämför resor, artiklar och ändringar med din privata Dropbox App Folder.</p><p><b>Appuppdatering</b> hämtar ny funktionalitet från Packas publika appskal och innehåller aldrig dina packlistor.</p></div></section>`;
 }
 

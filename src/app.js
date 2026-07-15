@@ -6,6 +6,7 @@ import {
   backupActiveDropboxSession,
   completeDropboxLiveTest,
   disconnectDropboxSession,
+  getDropboxSyncDiagnostics,
   hasActiveDropboxSession,
   hasStoredDropboxCredential,
   isDropboxCallback,
@@ -19,7 +20,7 @@ const title = document.getElementById('view-title');
 const kicker = document.getElementById('view-kicker');
 const ACTIVE_TRIP_KEY = 'packa:active-trip-id';
 const LAST_SYNC_KEY = 'packa:last-successful-dropbox-sync';
-const APP_VERSION = '2026-07-15-17';
+const APP_VERSION = '2026-07-15-18';
 
 function storedLastSyncAt() {
   try {
@@ -39,6 +40,11 @@ const runtime = {
   syncStatus: navigator.onLine === false ? 'offline' : 'local_saved',
   detail: 'Anslut Dropbox för att hämta dina befintliga resor.',
   lastSyncedAt: storedLastSyncAt(),
+  pendingOps: null,
+  knownAppDevices: null,
+  deviceId: '',
+  lastUploadedOps: null,
+  lastDownloadedOps: null,
   appUpdateStatus: navigator.onLine === false ? 'offline' : 'checking',
   appUpdateDetail: navigator.onLine === false ? 'Anslut till internet för att söka efter en ny version.' : 'Kontrollerar den installerade appversionen…',
   error: ''
@@ -174,6 +180,11 @@ function statusViewModel() {
     lastSync: formattedLastSync(false),
     dropboxAuthorized: runtime.dropboxAuthorized,
     dropboxCredentialStored: runtime.dropboxCredentialStored,
+    pendingOps: runtime.pendingOps,
+    knownAppDevices: runtime.knownAppDevices,
+    deviceId: runtime.deviceId,
+    lastUploadedOps: runtime.lastUploadedOps,
+    lastDownloadedOps: runtime.lastDownloadedOps,
     appVersion: APP_VERSION,
     appUpdateLabel: appUpdateLabel(),
     appUpdateDetail: runtime.appUpdateDetail
@@ -188,6 +199,19 @@ function updateSyncUi() {
     el.textContent = runtime.dropboxAuthorized
       ? 'Aktiv – automatisk synk är igång'
       : (runtime.dropboxCredentialStored ? 'Sparad behörighet finns men kunde inte aktiveras' : 'Inte ansluten på den här enheten');
+  });
+  document.querySelectorAll('[data-status-pending-ops]').forEach(el => {
+    el.textContent = runtime.pendingOps === null ? 'Läser…' : (runtime.pendingOps ? `${runtime.pendingOps} ändringar väntar på uppladdning` : 'Inga ändringar väntar');
+  });
+  document.querySelectorAll('[data-status-last-result]').forEach(el => {
+    el.textContent = runtime.lastUploadedOps === null || runtime.lastDownloadedOps === null
+      ? 'Inget resultat i den här sessionen'
+      : `${runtime.lastUploadedOps} skickade · ${runtime.lastDownloadedOps} hämtade`;
+  });
+  document.querySelectorAll('[data-status-device]').forEach(el => {
+    const shortId = runtime.deviceId ? runtime.deviceId.slice(-8) : 'okänd';
+    const devices = runtime.knownAppDevices === null ? '' : ` · ${runtime.knownAppDevices} kända appenheter`;
+    el.textContent = `${shortId}${devices}`;
   });
   document.querySelectorAll('[data-action="connect-dropbox"]').forEach(button => {
     const realData = Boolean(currentCore()?.real);
@@ -229,6 +253,21 @@ function setSyncState(syncStatus, detail, { authorized = runtime.dropboxAuthoriz
   updateSyncUi();
 }
 
+async function refreshSyncDiagnostics(result = null, { update = true } = {}) {
+  if (result) {
+    runtime.lastUploadedOps = result.uploadedOps ?? 0;
+    runtime.lastDownloadedOps = result.downloadedOps ?? 0;
+  }
+  const diagnostics = await getDropboxSyncDiagnostics(realWorkspace?.repository).catch(() => null);
+  if (diagnostics) {
+    runtime.pendingOps = diagnostics.pendingOps;
+    runtime.knownAppDevices = diagnostics.knownAppDevices;
+    runtime.deviceId = diagnostics.deviceId;
+  }
+  if (update) updateSyncUi();
+  return diagnostics;
+}
+
 export function updateConnectionState() {
   const offline = navigator.onLine === false;
   shell.classList.toggle('offline', offline);
@@ -249,7 +288,13 @@ async function mutateCore(mutation, { nextView = currentView } = {}) {
     if (hasActiveDropboxSession() && currentCore()?.real) {
       setSyncState('syncing', 'Ändringen är lokalt sparad och synkas nu…', { authorized: true });
       const result = await syncActiveDropboxSession();
+      await refreshSyncDiagnostics(result, { update: false });
       setSyncState('synced', `Synkad. ${result.uploadedOps} lokala ändringar skickades och ${result.downloadedOps} fjärändringar hämtades.`, { authorized: true });
+    } else if (currentCore()?.real) {
+      const diagnostics = await refreshSyncDiagnostics(null, { update: false });
+      setSyncState('local_saved', diagnostics?.pendingOps
+        ? `${diagnostics.pendingOps} lokala ändringar väntar på att Dropbox ansluts.`
+        : 'Ändringen är lokalt sparad.', { authorized: false });
     }
   } catch (error) {
     console.error('Ändringen stoppades.', error);
@@ -312,6 +357,7 @@ async function syncOpenSession() {
       await realWorkspace?.init({ preferredTripId: currentCore()?.activeTripId || storedActiveTripId() });
       if (realWorkspace?.hasData()) coreWorkspace = realWorkspace;
       rememberActiveTrip();
+      await refreshSyncDiagnostics(result, { update: false });
       setSyncState('synced', `Synkad. ${result.uploadedOps} lokala ändringar skickades och ${result.downloadedOps} fjärändringar hämtades.`, { authorized: true });
       showView(currentView);
       return result;
@@ -347,6 +393,7 @@ async function restorePersistedDropboxSession() {
       if (!realWorkspace.hasData()) throw new Error('Dropbox-synken slutfördes men ingen master hittades');
       coreWorkspace = realWorkspace;
       rememberActiveTrip();
+      await refreshSyncDiagnostics(result, { update: false });
       setSyncState('synced', `Automatisk synk klar. ${result.uploadedOps} lokala ändringar skickades och ${result.downloadedOps} ändringar hämtades.`, { authorized: true });
       showView(currentView);
       return result;
@@ -495,9 +542,14 @@ document.addEventListener('click', async event => {
     return;
   }
   if (action === 'delete-trip') {
-    if (!confirmAction('Ta bort resan helt? Detta kan inte ångras utom via Dropbox-historik eller en JSON-export.')) return;
+    if (!confirmAction('Flytta resan till Nyligen raderade? Den kan återställas under Mer → Status och version.')) return;
     ui.tripEditOpen = false;
     await mutateCore(() => coreWorkspace.deleteActiveTrip(), { nextView: 'resor' });
+    return;
+  }
+  if (action === 'restore-deleted-trip') {
+    if (!confirmAction('Återställ resan och dess packlista?')) return;
+    await mutateCore(() => coreWorkspace.restoreDeletedTrip(actionTarget.dataset.tripId), { nextView: 'resor' });
     return;
   }
   if (action === 'unlock-trip') {
@@ -943,6 +995,7 @@ try {
   realWorkspace = await createRealWorkspace({ preferredTripId: storedActiveTripId() });
   coreWorkspace = realWorkspace.hasData() ? realWorkspace : await createDemoWorkspace();
   rememberActiveTrip();
+  await refreshSyncDiagnostics(null, { update: false });
 } catch (error) {
   console.error('Packas lokala datalager kunde inte starta.', error);
   runtime.error = `Datalagret kunde inte starta: ${error.message}`;
@@ -964,6 +1017,7 @@ if (isDropboxCallback()) {
       coreWorkspace = realWorkspace;
       rememberActiveTrip();
       ui.historyTripId = null;
+      await refreshSyncDiagnostics(result, { update: false });
       setSyncState(
         'synced',
         `Dina resor är hämtade. ${result.downloadedOps} privata operationer lästes och ${result.uploadedOps} lokala ändringar skickades.`,
@@ -991,6 +1045,10 @@ window.__PACKA__ = Object.freeze({
   get dropboxCredentialStored() { return runtime.dropboxCredentialStored; },
   get syncStatus() { return runtime.syncStatus; },
   get lastSyncedAt() { return runtime.lastSyncedAt; },
+  get pendingOps() { return runtime.pendingOps; },
+  get knownAppDevices() { return runtime.knownAppDevices; },
+  get deviceId() { return runtime.deviceId; },
+  get deletedTrips() { return currentCore()?.deletedTrips || []; },
   get appVersion() { return APP_VERSION; },
   get appUpdateStatus() { return runtime.appUpdateStatus; }
 });

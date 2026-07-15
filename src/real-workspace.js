@@ -1,4 +1,5 @@
 import { IndexedDBStore, MemoryStore, Repository, legacyV1ToOperations, materializedToLegacyV1, openPackaDB } from './data-layer.js';
+import { compareHLC } from './domain/hlc.js';
 import { calculateCatalogInsights, catalogPreview, catalogToCsv, duplicateCatalogGroups } from './insights.js';
 
 const DB_NAME = 'packa-live-v1';
@@ -86,8 +87,32 @@ function normalizeCatalog(record) {
   };
 }
 
+function validTimestamp(value) {
+  const timestamp = Date.parse(String(value || ''));
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function tripChronology(fields, id) {
+  if (fields.source === 'app') {
+    const created = validTimestamp(fields.created);
+    if (created !== null) return { timestamp: created, sequence: 0 };
+  }
+
+  const dated = validTimestamp(fields.date_from);
+  if (dated !== null) return { timestamp: dated, sequence: 0 };
+
+  const nameDate = String(fields.name || '').match(/\b(?:19|20)\d{2}-\d{2}-\d{2}\b/)?.[0];
+  const named = validTimestamp(nameDate);
+  if (named !== null) return { timestamp: named, sequence: 0 };
+
+  const year = Number(fields.year) || Number(String(fields.name || '').match(/\b(?:19|20)\d{2}\b/)?.[0]) || 1900;
+  const legacySequence = Number(/^H(\d+)$/.exec(String(id || ''))?.[1]) || 0;
+  return { timestamp: Date.UTC(year, 0, 1), sequence: legacySequence };
+}
+
 function normalizeTrip(record) {
   const fields = valueOf(record);
+  const chronology = tripChronology(fields, record.entity_id);
   return {
     ...fields,
     id: record.entity_id,
@@ -103,6 +128,8 @@ function normalizeTrip(record) {
     status: STATUS_FROM_V1[fields.status] || 'archived',
     source: fields.source || 'import',
     createdAt: fields.created || `${fields.year || 1900}-01-01`,
+    chronologyTimestamp: chronology.timestamp,
+    chronologySequence: chronology.sequence,
     editable: fields.source === 'app' && !['complete', 'archived'].includes(STATUS_FROM_V1[fields.status]),
     unlockable: fields.source === 'app' && ['complete', 'archived'].includes(STATUS_FROM_V1[fields.status]),
     real: true
@@ -197,8 +224,18 @@ export class RealWorkspace {
     const statusOrder = { packing: 0, planning: 1, complete: 2, archived: 3 };
     return this.repository.listEntities(TYPES.trip).map(normalizeTrip).sort((a, b) => {
       const status = (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
-      return status || String(b.createdAt).localeCompare(String(a.createdAt));
+      return status
+        || b.chronologyTimestamp - a.chronologyTimestamp
+        || b.chronologySequence - a.chronologySequence
+        || b.id.localeCompare(a.id, 'sv');
     });
+  }
+
+  deletedTrips() {
+    return this.repository.listEntities(TYPES.trip, { includeDeleted: true })
+      .filter(record => record.deleted && record.fields.source === 'app')
+      .map(normalizeTrip)
+      .sort((a, b) => b.chronologyTimestamp - a.chronologyTimestamp || b.id.localeCompare(a.id, 'sv'));
   }
 
   tripItems(tripId = this.activeTripId) {
@@ -257,6 +294,7 @@ export class RealWorkspace {
       allCatalog,
       duplicateGroups: duplicateCatalogGroups(allCatalog),
       trips: withRows,
+      deletedTrips: this.deletedTrips(),
       activeTripId: this.activeTripId,
       activeTrip: withRows.find(trip => trip.id === this.activeTripId) || null,
       templates,
@@ -398,9 +436,34 @@ export class RealWorkspace {
 
   async deleteActiveTrip() {
     const trip = this.assertActiveEditable();
-    for (const row of this.tripItems(trip.id)) await this.repository.deleteEntity(TYPES.item, row.id);
     await this.repository.deleteEntity(TYPES.trip, trip.id);
     this.activeTripId = this.trips().find(entry => ['packing', 'planning'].includes(entry.status))?.id || null;
+  }
+
+  async restoreDeletedTrip(tripId) {
+    const record = this.repository.getEntity(TYPES.trip, tripId, { includeDeleted: true });
+    if (!record?.deleted || record.fields.source !== 'app') throw new Error('Den raderade resan finns inte');
+
+    const allOps = await this.store.getAllOps();
+    const tripDeletes = allOps.filter(op => op.entity_type === TYPES.trip && op.entity_id === tripId && op.field === '__deleted');
+    const winningDelete = tripDeletes.reduce((latest, op) => !latest || compareHLC(op.hlc, latest.hlc) > 0 ? op : latest, null);
+    const rowsToRestore = [];
+    if (winningDelete?.value === true) {
+      const ownBySequence = new Map(allOps
+        .filter(op => op.device_id === winningDelete.device_id)
+        .map(op => [op.seq, op]));
+      for (let sequence = winningDelete.seq - 1; sequence > 0; sequence -= 1) {
+        const op = ownBySequence.get(sequence);
+        if (!op || op.entity_type !== TYPES.item || op.field !== '__deleted' || op.value !== true) break;
+        const row = this.repository.getEntity(TYPES.item, op.entity_id, { includeDeleted: true });
+        if (row?.deleted && row.fields[INTERNAL_TRIP_ID] === tripId) rowsToRestore.push({ entityType: TYPES.item, entityId: op.entity_id });
+      }
+    }
+    if (rowsToRestore.length) await this.repository.restoreEntities(rowsToRestore);
+    await this.repository.restoreEntity(TYPES.trip, tripId);
+    const restored = this.trips().find(trip => trip.id === tripId);
+    if (restored && ['packing', 'planning'].includes(restored.status)) this.activeTripId = tripId;
+    return { tripId, restoredRows: rowsToRestore.length };
   }
 
   async setIncluded(catalogId, included) {

@@ -12,10 +12,11 @@ export class SyncEngine {
     this.transport = transport;
     this.batchSize = batchSize;
     this.keyPrefix = `sync:${transport.id || 'transport'}`;
+    this.uploadedSeqKey = `${this.keyPrefix}:uploaded_seq:${repository.deviceId}`;
   }
 
   async uploadLocal() {
-    const uploadedSeq = await this.repository.store.getMeta(`${this.keyPrefix}:uploaded_seq`) ?? 0;
+    const uploadedSeq = await this.repository.store.getMeta(this.uploadedSeqKey) ?? 0;
     const all = await this.repository.store.getAllOps();
     const pending = all
       .filter(op => op.device_id === this.repository.deviceId && op.seq > uploadedSeq)
@@ -25,11 +26,28 @@ export class SyncEngine {
     for (let index = 0; index < pending.length; index += this.batchSize) {
       const batch = createBatch(pending.slice(index, index + this.batchSize));
       await this.transport.putBatch(batch);
-      await this.repository.store.putMeta(`${this.keyPrefix}:uploaded_seq`, batch.to_seq);
+      await this.repository.store.putMeta(this.uploadedSeqKey, batch.to_seq);
       uploadedOps += batch.ops.length;
       uploadedBatches += 1;
     }
     return { uploadedOps, uploadedBatches };
+  }
+
+  async diagnostics() {
+    const uploadedSeq = await this.repository.store.getMeta(this.uploadedSeqKey) ?? 0;
+    const all = await this.repository.store.getAllOps();
+    const ownOps = all.filter(op => op.device_id === this.repository.deviceId);
+    const pendingOps = ownOps.filter(op => op.seq > uploadedSeq).length;
+    const appDevices = [...new Set([this.repository.deviceId, ...all.map(op => op.device_id)])
+      .values()]
+      .filter(id => /^(?:packa-web-|web-)/.test(id));
+    return {
+      deviceId: this.repository.deviceId,
+      localSeq: ownOps.reduce((max, op) => Math.max(max, op.seq), 0),
+      uploadedSeq,
+      pendingOps,
+      knownAppDevices: appDevices.length
+    };
   }
 
   async downloadRemote({ allowCursorReset = true } = {}) {
