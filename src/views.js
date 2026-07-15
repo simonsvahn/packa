@@ -1,6 +1,6 @@
 import { calculateCatalogInsights } from './insights.js';
 
-export const VIEW_ORDER = ['resor', 'planera', 'packa', 'matris', 'master', 'vanor', 'bibliotek', 'data'];
+export const VIEW_ORDER = ['resor', 'planera', 'packa', 'matris', 'master', 'vanor', 'bibliotek', 'data', 'status'];
 
 export const VIEW_META = Object.freeze({
   resor: { title: 'Resor', kicker: 'Översikt' },
@@ -10,7 +10,8 @@ export const VIEW_META = Object.freeze({
   master: { title: 'Master', kicker: 'Artiklar · kurering' },
   vanor: { title: 'Vanor', kicker: 'Historik · beslutsstöd' },
   bibliotek: { title: 'Bibliotek', kicker: 'Väskor · påsar' },
-  data: { title: 'Data', kicker: 'Export · återhämtning' }
+  data: { title: 'Data', kicker: 'Export · återhämtning' },
+  status: { title: 'Status och version', kicker: 'Mer · synk och app' }
 });
 
 export function normalizeView(value) {
@@ -35,7 +36,7 @@ const statusLabel = status => ({
 const dataBoundary = (core, compact = false) => core?.real ? `
   <div class="demo-boundary real-boundary${compact ? ' compact-boundary' : ''}" role="status">
     <span aria-hidden="true">🔒</span>
-    <div><b>Visar dina privata resor</b><small data-sync-summary>Dropbox-status läses in…</small><span class="boundary-copy"> Resorna är sparade lokalt på den här enheten. Dropbox-synk visas separat.</span></div>
+    <div><b>Visar dina privata resor</b><small>Lokalt sparat på den här enheten</small><span class="boundary-copy"> Synk- och versionsdetaljer finns under Mer → Status och version.</span></div>
   </div>` : `
   <div class="demo-boundary${compact ? ' compact-boundary' : ''}" role="note">
     <span aria-hidden="true">◇</span>
@@ -207,10 +208,6 @@ function renderResor(core, ui, error) {
         <ul class="check-list">
           ${real ? `<li>${core.catalog.length} aktiva artiklar finns lokalt</li><li>${totalRows} historiska resrader är inlästa</li><li>Arkiverade resor är skrivskyddade</li><li>V1 och v2 finns kvar som fallback</li>` : '<li>Testkatalog med nio påhittade artiklar</li><li>Egen lokal databas för kärnflödet</li><li>Ingen import av packlista-data.json</li><li>Ingen uppladdning av testresor till Dropbox</li>'}
         </ul>
-        <div class="sync-test">
-          <button class="secondary-button full-button" type="button" data-action="connect-dropbox">Anslut Dropbox</button>
-          <p class="sync-detail" data-sync-detail>Anslut Dropbox för att hämta eller synka resor.</p>
-        </div>
       </aside>
     </div>`;
 }
@@ -564,7 +561,39 @@ function renderData(core, ui, error) {
     <section class="card recovery-card"><h2>Återhämtningsordning</h2><ol><li>Synka först om Dropbox-sessionen är tillgänglig.</li><li>Exportera en aktuell JSON innan en restore.</li><li>Välj arkivfil och kontrollera antalen.</li><li>Bekräfta restore; en automatisk backup laddas ner och, om Dropbox är ansluten, sparas även privat i <code>/archive/</code>.</li></ol></section>`;
 }
 
-export function renderView(view, { core = null, ui = {}, error = '' } = {}) {
+function renderStatus(core, status = {}, error = '') {
+  const tripWord = core.real ? (core.trips.length === 1 ? 'resa' : 'resor') : (core.trips.length === 1 ? 'testresa' : 'testresor');
+  const itemWord = core.real ? (core.catalog.length === 1 ? 'aktiv artikel' : 'aktiva artiklar') : (core.catalog.length === 1 ? 'testartikel' : 'testartiklar');
+  const localData = `${core.trips.length} ${tripWord} · ${core.catalog.length} ${itemWord}`;
+  const lastSync = status.lastSync || 'Ingen lyckad synk registrerad på den här enheten';
+  const syncButton = status.dropboxAuthorized ? 'Synka nu' : (core.real ? 'Anslut Dropbox och synka' : 'Anslut Dropbox och hämta privata resor');
+  return `<section class="hero compact-hero status-hero"><div><p class="eyebrow">Två separata lager</p><h2>Data och appversion.</h2><p>Här ser du om dina privata resor har synkats och om den senaste Packa-versionen körs.</p></div></section>
+    ${error ? `<div class="error-notice" role="alert">${escapeHtml(error)}</div>` : ''}
+    <div class="status-grid">
+      <section class="card status-card" aria-labelledby="data-status-title">
+        <div class="status-card-heading"><div><p class="eyebrow">Privat innehåll</p><h2 id="data-status-title">Data</h2></div><span class="status-badge" data-status-sync-state>${escapeHtml(status.syncLabel || 'Läser status…')}</span></div>
+        <dl class="status-facts">
+          <div><dt>På enheten</dt><dd>${escapeHtml(localData)}</dd></div>
+          <div><dt>Senast lyckad synk</dt><dd data-status-last-sync>${escapeHtml(lastSync)}</dd></div>
+          <div><dt>Dropbox-session</dt><dd data-status-dropbox-session>${status.dropboxAuthorized ? 'Aktiv i den öppna appen' : 'Inte aktiv – ny behörighet behövs'}</dd></div>
+        </dl>
+        <button class="primary-button full-button" type="button" data-action="connect-dropbox" data-sync-label="status">${escapeHtml(syncButton)}</button>
+        <p class="status-detail" data-sync-detail>${escapeHtml(status.syncDetail || 'Dropbox-status läses in…')}</p>
+      </section>
+      <section class="card status-card" aria-labelledby="app-status-title">
+        <div class="status-card-heading"><div><p class="eyebrow">Funktionalitet</p><h2 id="app-status-title">Appversion</h2></div><span class="status-badge" data-app-update-summary>${escapeHtml(status.appUpdateLabel || 'Kontrollerar…')}</span></div>
+        <dl class="status-facts">
+          <div><dt>Aktiv version</dt><dd><code data-app-version>${escapeHtml(status.appVersion || 'okänd')}</code></dd></div>
+          <div><dt>Uppdatering</dt><dd data-app-update-detail>${escapeHtml(status.appUpdateDetail || 'Söker efter en ny version…')}</dd></div>
+        </dl>
+        <button class="secondary-button full-button" type="button" data-action="check-app-update">Sök efter uppdatering</button>
+        <p class="status-detail">När en ny version hittas hämtas den och appen laddas om. Dina privata data ligger kvar i det separata lokala datalagret.</p>
+      </section>
+    </div>
+    <section class="card status-explainer"><h2>Vad är vad?</h2><div><p><b>Datasynk</b> jämför resor, artiklar och ändringar med din privata Dropbox App Folder.</p><p><b>Appuppdatering</b> hämtar ny funktionalitet från Packas publika appskal och innehåller aldrig dina packlistor.</p></div></section>`;
+}
+
+export function renderView(view, { core = null, ui = {}, error = '', status = {} } = {}) {
   if (!core) return `${dataBoundary(core)}${shellCard('Packa startar', 'Det lokala operationslagret förbereds.')}`;
   if (view === 'resor') return renderResor(core, ui, error);
   if (view === 'planera') return renderPlanera(core, ui, error);
@@ -574,5 +603,6 @@ export function renderView(view, { core = null, ui = {}, error = '' } = {}) {
   if (view === 'vanor') return renderVanor(core, ui);
   if (view === 'bibliotek') return renderBibliotek(core, ui, error);
   if (view === 'data') return renderData(core, ui, error);
+  if (view === 'status') return renderStatus(core, status, error);
   return shellCard('Vyn saknas', 'Gå tillbaka till Resor.');
 }

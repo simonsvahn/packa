@@ -16,6 +16,7 @@ const title = document.getElementById('view-title');
 const kicker = document.getElementById('view-kicker');
 const ACTIVE_TRIP_KEY = 'packa:active-trip-id';
 const LAST_SYNC_KEY = 'packa:last-successful-dropbox-sync';
+const APP_VERSION = '2026-07-15-15';
 
 function storedLastSyncAt() {
   try {
@@ -34,6 +35,8 @@ const runtime = {
   syncStatus: navigator.onLine === false ? 'offline' : 'local_saved',
   detail: 'Anslut Dropbox för att hämta dina befintliga resor.',
   lastSyncedAt: storedLastSyncAt(),
+  appUpdateStatus: navigator.onLine === false ? 'offline' : 'checking',
+  appUpdateDetail: navigator.onLine === false ? 'Anslut till internet för att söka efter en ny version.' : 'Kontrollerar den installerade appversionen…',
   error: ''
 };
 
@@ -75,6 +78,7 @@ const ui = {
 
 let pendingRestore = null;
 let backgroundSyncPromise = null;
+let serviceWorkerRegistration = null;
 
 function setCurrentLinks(view) {
   document.querySelectorAll('[data-view-link]').forEach(link => {
@@ -113,7 +117,7 @@ export function showView(value, { updateHash = true } = {}) {
   currentView = view;
   title.textContent = meta.title;
   kicker.textContent = meta.kicker;
-  viewRoot.innerHTML = renderView(view, { core: currentCore(), ui, error: runtime.error });
+  viewRoot.innerHTML = renderView(view, { core: currentCore(), ui, error: runtime.error, status: statusViewModel() });
   viewRoot.dataset.view = view;
   shell.dataset.currentView = view;
   setCurrentLinks(view);
@@ -124,17 +128,17 @@ export function showView(value, { updateHash = true } = {}) {
     document.body.scrollTop = 0;
   }
   updateSyncUi();
+  updateVersionUi();
   return view;
 }
 
 function connectionText(compact = false) {
   const status = navigator.onLine === false ? 'offline' : runtime.syncStatus;
-  const last = formattedLastSync(compact);
-  if (status === 'offline') return compact ? `Offline${last ? ` · ${last}` : ''}` : `Offline · lokalt sparat${last ? ` · senast synkad ${last}` : ''}`;
+  if (status === 'offline') return compact ? 'Offline' : 'Offline · lokalt sparat';
   if (status === 'syncing') return 'Synkar…';
-  if (status === 'synced') return compact ? `Synkad${last ? ` ${last}` : ''}` : `Dropbox ansluten${last ? ` · senast synkad ${last}` : ''}`;
+  if (status === 'synced') return compact ? 'Synkad' : 'Dropbox ansluten';
   if (status === 'action_required') return 'Åtgärd krävs';
-  return compact ? `Ej ansluten${last ? ` · ${last}` : ''}` : `Lokalt sparat · Dropbox ej ansluten${last ? ` · senast synkad ${last}` : ''}`;
+  return compact ? 'Ej ansluten' : 'Lokalt sparat · Dropbox ej ansluten';
 }
 
 function formattedLastSync(compact = false) {
@@ -147,33 +151,58 @@ function formattedLastSync(compact = false) {
   ).format(value);
 }
 
-function boundarySyncText(compact = false) {
-  const status = navigator.onLine === false ? 'offline' : runtime.syncStatus;
-  const last = formattedLastSync(compact);
-  if (compact) {
-    if (status === 'syncing') return '· Synkar…';
-    if (status === 'action_required') return `· Synkfel${last ? ` · ${last}` : ''}`;
-    if (status === 'offline') return `· Offline${last ? ` · ${last}` : ''}`;
-    return last ? `· ${last}` : '· Ej synkad';
-  }
-  if (status === 'syncing') return 'Dropbox synkar nu.';
-  if (status === 'action_required') return `Dropbox behöver åtgärdas.${last ? ` Senast synkad ${last}.` : ''}`;
-  if (status === 'offline') return `Offline.${last ? ` Senast synkad ${last}.` : ' Ingen lyckad Dropbox-synk har registrerats på den här enheten.'}`;
-  if (runtime.dropboxAuthorized) return last ? `Dropbox är ansluten. Senast synkad ${last}.` : 'Dropbox är ansluten men ingen lyckad synk har registrerats ännu.';
-  return last ? `Dropbox är inte ansluten just nu. Senast synkad ${last}.` : 'Dropbox är inte ansluten just nu. Ingen lyckad synk har registrerats på den här enheten.';
+function appUpdateLabel() {
+  return ({
+    checking: 'Kontrollerar…',
+    current: 'Uppdaterad',
+    available: 'Ny version hämtas',
+    offline: 'Offline',
+    unavailable: 'Kan inte kontrolleras',
+    error: 'Kontroll misslyckades'
+  })[runtime.appUpdateStatus] || 'Okänd status';
+}
+
+function statusViewModel() {
+  return {
+    syncLabel: connectionText(false),
+    syncDetail: runtime.detail,
+    lastSync: formattedLastSync(false),
+    dropboxAuthorized: runtime.dropboxAuthorized,
+    appVersion: APP_VERSION,
+    appUpdateLabel: appUpdateLabel(),
+    appUpdateDetail: runtime.appUpdateDetail
+  };
 }
 
 function updateSyncUi() {
   document.querySelectorAll('[data-sync-detail]').forEach(el => { el.textContent = runtime.detail; });
-  document.querySelectorAll('[data-sync-summary]').forEach(el => { el.textContent = boundarySyncText(Boolean(el.closest('.compact-boundary'))); });
+  document.querySelectorAll('[data-status-sync-state]').forEach(el => { el.textContent = connectionText(false); });
+  document.querySelectorAll('[data-status-last-sync]').forEach(el => { el.textContent = formattedLastSync(false) || 'Ingen lyckad synk registrerad på den här enheten'; });
+  document.querySelectorAll('[data-status-dropbox-session]').forEach(el => { el.textContent = runtime.dropboxAuthorized ? 'Aktiv i den öppna appen' : 'Inte aktiv – ny behörighet behövs'; });
   document.querySelectorAll('[data-action="connect-dropbox"]').forEach(button => {
     const realData = Boolean(currentCore()?.real);
     button.disabled = runtime.syncStatus === 'syncing';
-    button.textContent = runtime.syncStatus === 'syncing'
-      ? 'Synkar privata resor…'
-      : (runtime.dropboxAuthorized || realData ? 'Synka privata resor med Dropbox' : 'Anslut Dropbox och hämta mina resor');
+    if (runtime.syncStatus === 'syncing') button.textContent = 'Synkar privata resor…';
+    else if (button.dataset.syncLabel === 'status') button.textContent = runtime.dropboxAuthorized ? 'Synka nu' : (realData ? 'Anslut Dropbox och synka' : 'Anslut Dropbox och hämta privata resor');
+    else button.textContent = runtime.dropboxAuthorized || realData ? 'Synka privata resor med Dropbox' : 'Anslut Dropbox och hämta mina resor';
   });
   updateConnectionState();
+}
+
+function updateVersionUi() {
+  document.querySelectorAll('[data-app-version]').forEach(el => { el.textContent = APP_VERSION; });
+  document.querySelectorAll('[data-app-update-summary]').forEach(el => { el.textContent = appUpdateLabel(); });
+  document.querySelectorAll('[data-app-update-detail]').forEach(el => { el.textContent = runtime.appUpdateDetail; });
+  document.querySelectorAll('[data-action="check-app-update"]').forEach(button => {
+    button.disabled = runtime.appUpdateStatus === 'checking';
+    button.textContent = runtime.appUpdateStatus === 'checking' ? 'Söker efter uppdatering…' : 'Sök efter uppdatering';
+  });
+}
+
+function setAppUpdateState(appUpdateStatus, appUpdateDetail) {
+  runtime.appUpdateStatus = appUpdateStatus;
+  runtime.appUpdateDetail = appUpdateDetail;
+  updateVersionUi();
 }
 
 function setSyncState(syncStatus, detail, { authorized = runtime.dropboxAuthorized } = {}) {
@@ -285,14 +314,48 @@ async function syncOpenSession() {
   return backgroundSyncPromise;
 }
 
+async function checkAppUpdate() {
+  if (navigator.onLine === false) {
+    setAppUpdateState('offline', 'Anslut till internet för att söka efter en ny version.');
+    return null;
+  }
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:') {
+    setAppUpdateState('unavailable', 'Webbläsaren kan inte kontrollera appuppdateringar här.');
+    return null;
+  }
+  setAppUpdateState('checking', 'Kontrollerar om en ny Packa-version finns…');
+  try {
+    if (!serviceWorkerRegistration) await registerServiceWorker();
+    if (!serviceWorkerRegistration) return null;
+    await serviceWorkerRegistration.update?.();
+    if (serviceWorkerRegistration.waiting || serviceWorkerRegistration.installing) {
+      setAppUpdateState('available', 'En ny version hämtas och aktiveras. Appen laddas om automatiskt.');
+    } else {
+      setAppUpdateState('current', `Version ${APP_VERSION} är den senaste publicerade versionen.`);
+    }
+    return serviceWorkerRegistration;
+  } catch (error) {
+    setAppUpdateState('error', `Versionskontrollen misslyckades: ${error.message}`);
+    return null;
+  }
+}
+
 document.addEventListener('click', async event => {
   const actionTarget = event.target.closest('[data-action]');
   const action = actionTarget?.dataset.action;
   if (action) event.preventDefault();
 
   if (action === 'connect-dropbox') {
+    if (hasActiveDropboxSession()) {
+      await syncOpenSession();
+      return;
+    }
     setSyncState('syncing', 'Öppnar Dropbox-auktorisering…');
     beginDropboxLiveTest().catch(error => setSyncState('action_required', error.message));
+    return;
+  }
+  if (action === 'check-app-update') {
+    await checkAppUpdate();
     return;
   }
   if (action === 'open-new-trip') {
@@ -760,16 +823,22 @@ document.addEventListener('toggle', event => {
 }, true);
 
 window.addEventListener('hashchange', () => showView(location.hash, { updateHash: false }));
-window.addEventListener('online', () => { updateConnectionState(); syncOpenSession(); });
-window.addEventListener('offline', updateConnectionState);
+window.addEventListener('online', () => { updateConnectionState(); syncOpenSession(); checkAppUpdate(); });
+window.addEventListener('offline', () => {
+  updateConnectionState();
+  setAppUpdateState('offline', `Version ${APP_VERSION} körs. Anslut till internet för att kontrollera om en nyare version finns.`);
+});
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncOpenSession(); });
 
 export async function registerServiceWorker() {
-  if (!('serviceWorker' in navigator) || location.protocol === 'file:') return null;
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:') {
+    setAppUpdateState('unavailable', 'Webbläsaren kan inte kontrollera appuppdateringar här.');
+    return null;
+  }
   try {
     const hadController = Boolean(navigator.serviceWorker.controller);
     const registration = await navigator.serviceWorker.register('./sw.js', { scope: './' });
-    registration.update?.().catch?.(() => {});
+    serviceWorkerRegistration = registration;
     if (hadController && typeof navigator.serviceWorker.addEventListener === 'function') {
       let reloading = false;
       navigator.serviceWorker.addEventListener('controllerchange', () => {
@@ -778,9 +847,26 @@ export async function registerServiceWorker() {
         location.reload();
       }, { once: true });
     }
+    registration.addEventListener?.('updatefound', () => {
+      setAppUpdateState('available', 'En ny version hämtas och aktiveras. Appen laddas om automatiskt.');
+    });
+    if (navigator.onLine === false) {
+      setAppUpdateState('offline', `Version ${APP_VERSION} körs. Anslut till internet för att kontrollera om en nyare version finns.`);
+      return registration;
+    }
+    setAppUpdateState('checking', 'Kontrollerar om en ny Packa-version finns…');
+    if (typeof registration.update === 'function') await registration.update();
+    if (registration.waiting || registration.installing) {
+      setAppUpdateState('available', 'En ny version hämtas och aktiveras. Appen laddas om automatiskt.');
+    } else {
+      setAppUpdateState('current', `Version ${APP_VERSION} är den senaste publicerade versionen.`);
+    }
     return registration;
   } catch (error) {
     console.warn('Service Worker kunde inte registreras.', error);
+    setAppUpdateState(navigator.onLine === false ? 'offline' : 'error', navigator.onLine === false
+      ? `Version ${APP_VERSION} körs offline. Versionskontroll kräver internet.`
+      : `Versionskontrollen misslyckades: ${error.message}`);
     return null;
   }
 }
@@ -815,7 +901,7 @@ if (isDropboxCallback()) {
         `Dina resor är hämtade. ${result.downloadedOps} privata operationer lästes och ${result.uploadedOps} lokala ändringar skickades.`,
         { authorized: true }
       );
-      showView('resor');
+      showView('status');
     })
     .catch(error => {
       console.error('Dropbox-synken stoppades.', error);
@@ -832,5 +918,7 @@ window.__PACKA__ = Object.freeze({
   get demoSnapshot() { return currentCore(); },
   get dropboxAuthorized() { return runtime.dropboxAuthorized; },
   get syncStatus() { return runtime.syncStatus; },
-  get lastSyncedAt() { return runtime.lastSyncedAt; }
+  get lastSyncedAt() { return runtime.lastSyncedAt; },
+  get appVersion() { return APP_VERSION; },
+  get appUpdateStatus() { return runtime.appUpdateStatus; }
 });
