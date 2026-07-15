@@ -39,7 +39,7 @@ const ui = {
   planGroup: 'category',
   packGroup: 'category',
   groupsOpen: true,
-  showBags: true,
+  showBags: typeof window.matchMedia === 'function' ? window.matchMedia('(min-width:821px)').matches : true,
   hidePacked: false,
   hideTaken: false,
   splitItemId: null,
@@ -62,6 +62,7 @@ const ui = {
 
 let pendingRestore = null;
 let backgroundSyncPromise = null;
+const ACTIVE_TRIP_KEY = 'packa:active-trip-id';
 
 const STATUS_LABEL = {
   offline: 'Offline · lokalt sparat',
@@ -82,6 +83,25 @@ function currentCore() {
   return coreWorkspace?.snapshot() || null;
 }
 
+function storedActiveTripId() {
+  try {
+    return localStorage.getItem(ACTIVE_TRIP_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberActiveTrip() {
+  const core = currentCore();
+  if (!core?.real) return;
+  try {
+    if (core.activeTripId) localStorage.setItem(ACTIVE_TRIP_KEY, core.activeTripId);
+    else localStorage.removeItem(ACTIVE_TRIP_KEY);
+  } catch {
+    // IndexedDB är fortfarande sanningskällan om privat läge blockerar localStorage.
+  }
+}
+
 export function showView(value, { updateHash = true } = {}) {
   const view = normalizeView(value);
   const meta = VIEW_META[view];
@@ -91,6 +111,7 @@ export function showView(value, { updateHash = true } = {}) {
   kicker.textContent = meta.kicker;
   viewRoot.innerHTML = renderView(view, { core: currentCore(), ui, error: runtime.error });
   viewRoot.dataset.view = view;
+  shell.dataset.currentView = view;
   setCurrentLinks(view);
   document.title = `${meta.title} · Packa`;
   if (updateHash && location.hash !== `#${view}`) history.replaceState(null, '', `#${view}`);
@@ -147,6 +168,7 @@ async function mutateCore(mutation, { nextView = currentView } = {}) {
   if (!coreWorkspace) return;
   try {
     await mutation();
+    rememberActiveTrip();
     runtime.error = '';
     if (hasActiveDropboxSession() && currentCore()?.real) {
       setSyncState('syncing', 'Ändringen är lokalt sparad och synkas nu…', { authorized: true });
@@ -211,8 +233,9 @@ async function syncOpenSession() {
     try {
       setSyncState('syncing', 'Kontrollerar ändringar från andra enheter…', { authorized: true });
       const result = await syncActiveDropboxSession();
-      await realWorkspace?.init();
+      await realWorkspace?.init({ preferredTripId: currentCore()?.activeTripId || storedActiveTripId() });
       if (realWorkspace?.hasData()) coreWorkspace = realWorkspace;
+      rememberActiveTrip();
       setSyncState('synced', `Synkad. ${result.uploadedOps} lokala ändringar skickades och ${result.downloadedOps} fjärändringar hämtades.`, { authorized: true });
       showView(currentView);
       return result;
@@ -277,6 +300,7 @@ document.addEventListener('click', async event => {
   }
   if (action === 'open-trip') {
     coreWorkspace.selectTrip(actionTarget.dataset.tripId);
+    rememberActiveTrip();
     ui.customRowOpen = false;
     showView(actionTarget.dataset.targetView || 'planera');
     return;
@@ -423,8 +447,15 @@ document.addEventListener('click', async event => {
     return;
   }
   if (action === 'finish-trip') {
-    if (!confirmAction('Avsluta resan och markera den som klar?')) return;
-    await mutateCore(() => coreWorkspace.setTripStatus('complete'), { nextView: 'resor' });
+    const trip = currentCore()?.activeTrip;
+    if (!trip) return;
+    const packed = trip.items.filter(item => item.packed).length;
+    const remaining = trip.items.length - packed;
+    const message = remaining
+      ? `${packed} av ${trip.items.length} rader är markerade som packade. Avsluta och arkivera ändå? De ${remaining} omarkerade raderna bevaras oförändrade i historiken.`
+      : `Alla ${packed} rader är packade. Avsluta och arkivera resan?`;
+    if (!confirmAction(message)) return;
+    await mutateCore(() => coreWorkspace.finishAndArchiveActiveTrip(), { nextView: 'resor' });
     return;
   }
   if (action === 'clear-trip-filters') {
@@ -717,8 +748,9 @@ export async function registerServiceWorker() {
 }
 
 try {
-  realWorkspace = await createRealWorkspace();
+  realWorkspace = await createRealWorkspace({ preferredTripId: storedActiveTripId() });
   coreWorkspace = realWorkspace.hasData() ? realWorkspace : await createDemoWorkspace();
+  rememberActiveTrip();
 } catch (error) {
   console.error('Packas lokala datalager kunde inte starta.', error);
   runtime.error = `Datalagret kunde inte starta: ${error.message}`;
@@ -734,10 +766,11 @@ if (isDropboxCallback()) {
   completeDropboxLiveTest({ repository: realWorkspace?.repository })
     .then(async result => {
       if (!result) return;
-      realWorkspace = realWorkspace || await createRealWorkspace();
-      await realWorkspace.init();
+      realWorkspace = realWorkspace || await createRealWorkspace({ preferredTripId: storedActiveTripId() });
+      await realWorkspace.init({ preferredTripId: currentCore()?.activeTripId || storedActiveTripId() });
       if (!realWorkspace.hasData()) throw new Error('Dropbox-synken slutfördes men ingen master hittades');
       coreWorkspace = realWorkspace;
+      rememberActiveTrip();
       ui.historyTripId = null;
       setSyncState(
         'synced',

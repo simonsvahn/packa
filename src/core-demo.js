@@ -118,14 +118,15 @@ export class DemoWorkspace {
     this.activeTripId = null;
   }
 
-  async init() {
+  async init({ preferredTripId = this.activeTripId } = {}) {
     const seeded = await this.store.getMeta(SEED_KEY);
     if (!seeded) await this.seed();
     const trips = this.trips();
-    this.activeTripId = trips.find(trip => trip.status === 'packing')?.id
-      || trips.find(trip => trip.status === 'planning')?.id
-      || trips[0]?.id
-      || null;
+    const activeTrips = trips
+      .filter(trip => ['packing', 'planning'].includes(trip.status))
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    const preferred = activeTrips.find(trip => trip.id === preferredTripId);
+    this.activeTripId = preferred?.id || activeTrips[0]?.id || trips[0]?.id || null;
     return this;
   }
 
@@ -245,6 +246,14 @@ export class DemoWorkspace {
     const allowed = ['planning', 'packing', 'complete', 'archived'];
     if (!allowed.includes(status)) throw new Error('Ogiltig resestatus');
     await this.repository.setField(TYPES.trip, this.activeTripId, 'status', status);
+  }
+
+  async finishAndArchiveActiveTrip() {
+    const id = this.activeTripId;
+    if (!id) throw new Error('Ingen testresa är vald');
+    await this.repository.setField(TYPES.trip, id, 'status', 'archived');
+    await this.init({ preferredTripId: null });
+    return id;
   }
 
   async setIncluded(catalogId, included) {

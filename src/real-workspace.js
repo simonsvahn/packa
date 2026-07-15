@@ -169,11 +169,13 @@ export class RealWorkspace {
     this.activeTripId = null;
   }
 
-  async init() {
+  async init({ preferredTripId = this.activeTripId } = {}) {
     const trips = this.trips();
-    this.activeTripId = trips.find(trip => trip.status === 'packing')?.id
-      || trips.find(trip => trip.status === 'planning')?.id
-      || null;
+    const activeTrips = trips
+      .filter(trip => ['packing', 'planning'].includes(trip.status))
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    const preferred = activeTrips.find(trip => trip.id === preferredTripId);
+    this.activeTripId = preferred?.id || activeTrips[0]?.id || null;
     return this;
   }
 
@@ -384,6 +386,14 @@ export class RealWorkspace {
     const trip = this.trips().find(entry => entry.id === tripId);
     if (!trip || trip.source !== 'app' || trip.status !== 'complete') throw new Error('Bara en klar appskapad resa kan arkiveras');
     await this.repository.setField(TYPES.trip, tripId, 'status', 'arkiverad');
+  }
+
+  async finishAndArchiveActiveTrip() {
+    const trip = this.assertActiveEditable();
+    if (trip.source !== 'app') throw new Error('Bara en appskapad resa kan avslutas');
+    await this.repository.setField(TYPES.trip, trip.id, 'status', 'arkiverad');
+    await this.init({ preferredTripId: null });
+    return trip.id;
   }
 
   async deleteActiveTrip() {
@@ -633,8 +643,8 @@ export class RealWorkspace {
   }
 }
 
-export async function createRealWorkspace({ store = null, device = null, indexedDB } = {}) {
+export async function createRealWorkspace({ store = null, device = null, indexedDB, preferredTripId = null } = {}) {
   const resolvedStore = store || await createDefaultStore(indexedDB);
   const repository = await new Repository({ store: resolvedStore, deviceId: device || deviceId() }).init();
-  return new RealWorkspace({ repository, store: resolvedStore }).init();
+  return new RealWorkspace({ repository, store: resolvedStore }).init({ preferredTripId });
 }

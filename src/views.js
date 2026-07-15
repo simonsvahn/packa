@@ -32,14 +32,14 @@ const statusLabel = status => ({
   archived: 'Arkiverad'
 }[status] || status);
 
-const dataBoundary = core => core?.real ? `
-  <div class="demo-boundary real-boundary" role="status">
+const dataBoundary = (core, compact = false) => core?.real ? `
+  <div class="demo-boundary real-boundary${compact ? ' compact-boundary' : ''}" role="status">
     <span aria-hidden="true">✓</span>
-    <div><b>Privat data ansluten</b> Resorna ligger lokalt på enheten och synkas bara genom Packas privata Dropbox App Folder. Ingen personlig data ingår i den publika appkoden.</div>
+    <div><b>Privat data ansluten</b><span class="boundary-copy"> Resorna ligger lokalt på enheten och synkas bara genom Packas privata Dropbox App Folder. Ingen personlig data ingår i den publika appkoden.</span></div>
   </div>` : `
-  <div class="demo-boundary" role="note">
+  <div class="demo-boundary${compact ? ' compact-boundary' : ''}" role="note">
     <span aria-hidden="true">◇</span>
-    <div><b>Säker testyta</b> Allt du gör här sparas som syntetiska demo-operationer i en separat lokal databas. Originalmastern och Dropbox-testets databas berörs inte.</div>
+    <div><b>Säker testyta</b><span class="boundary-copy"> Allt du gör här sparas som syntetiska demo-operationer i en separat lokal databas. Originalmastern och Dropbox-testets databas berörs inte.</span></div>
   </div>`;
 
 const shellCard = (title, text) => `
@@ -420,6 +420,7 @@ function renderPacka(core, ui, error) {
   const total = trip.items.length;
   const taken = trip.items.filter(item => item.taken).length;
   const packed = trip.items.filter(item => item.packed).length;
+  const remaining = total - packed;
   const percent = total ? Math.round((packed / total) * 100) : 0;
   const visible = trip.items.filter(item => matchesFilter(item, filter))
     .filter(item => !ui.hidePacked || !item.packed)
@@ -431,29 +432,36 @@ function renderPacka(core, ui, error) {
   return `
     <section class="pack-progress" aria-label="Packprogress">
       <div><p class="eyebrow">${escapeHtml(trip.name)} · ${escapeHtml((trip.persons || []).join(' + ') || 'Resa')}</p><h2>${packed} av ${total} rader packade</h2><p>${taken} framtagna · progress räknar alltid alla rader</p><div class="person-progress">${personProgress}</div></div>
-      <div class="progress-ring" style="--progress:${percent * 3.6}deg"><b>${percent}%</b></div>
+      <div class="pack-progress-actions"><div class="progress-ring" style="--progress:${percent * 3.6}deg"><b>${percent}%</b></div><button class="finish-compact" type="button" data-action="finish-trip">Avsluta</button></div>
     </section>
-    ${dataBoundary(core)}
+    ${dataBoundary(core, true)}
     ${error ? `<div class="error-notice" role="alert">${escapeHtml(error)}</div>` : ''}
     ${renderTripEditor(core, ui)}
     ${renderFilterRow(core, ui)}
     <section class="pack-toolbar" aria-label="Visningsinställningar">
-      <button class="filter-chip${(ui.packGroup || 'category') === 'category' ? ' active' : ''}" type="button" data-action="set-pack-group" data-group="category">Kategori</button>
-      <button class="filter-chip${ui.packGroup === 'activity' ? ' active' : ''}" type="button" data-action="set-pack-group" data-group="activity">Aktivitet</button>
-      <button class="filter-chip${ui.packGroup === 'bag' ? ' active' : ''}" type="button" data-action="set-pack-group" data-group="bag">Per väska</button>
-      <button class="filter-chip${ui.showBags ? ' active' : ''}" type="button" aria-pressed="${ui.showBags}" data-action="toggle-pack-view" data-pack-key="showBags">Visa väskfält</button>
+      <div class="pack-group-picker" aria-label="Gruppera packlistan">
+        <button class="filter-chip${(ui.packGroup || 'category') === 'category' ? ' active' : ''}" type="button" data-action="set-pack-group" data-group="category">Kategori</button>
+        <button class="filter-chip${ui.packGroup === 'activity' ? ' active' : ''}" type="button" data-action="set-pack-group" data-group="activity">Aktivitet</button>
+        <button class="filter-chip${ui.packGroup === 'bag' ? ' active' : ''}" type="button" data-action="set-pack-group" data-group="bag">Väska</button>
+      </div>
       <button class="filter-chip${ui.hidePacked ? ' active' : ''}" type="button" aria-pressed="${ui.hidePacked}" data-action="toggle-pack-view" data-pack-key="hidePacked">Dölj packade <span>${packed}</span></button>
-      <button class="filter-chip${ui.hideTaken ? ' active' : ''}" type="button" aria-pressed="${ui.hideTaken}" data-action="toggle-pack-view" data-pack-key="hideTaken">Dölj framtagna <span>${taken}</span></button>
       <span class="toolbar-count">${visible.length} visas · ${total} räknas</span>
-      <button class="secondary-button" type="button" data-action="open-custom-row">+ Egen rad</button>
-      <button class="secondary-button" type="button" data-action="open-trip-edit">Reseuppgifter</button>
-      <button class="secondary-button print-button" type="button" data-action="print-trip">Skriv ut</button>
+      <details class="pack-more">
+        <summary>Fler val</summary>
+        <div class="pack-more-actions">
+          <button class="filter-chip${ui.showBags ? ' active' : ''}" type="button" aria-pressed="${ui.showBags}" data-action="toggle-pack-view" data-pack-key="showBags">${ui.showBags ? 'Dölj' : 'Visa'} väskfält</button>
+          <button class="filter-chip${ui.hideTaken ? ' active' : ''}" type="button" aria-pressed="${ui.hideTaken}" data-action="toggle-pack-view" data-pack-key="hideTaken">Dölj framtagna <span>${taken}</span></button>
+          <button class="secondary-button" type="button" data-action="open-custom-row">+ Egen rad</button>
+          <button class="secondary-button" type="button" data-action="open-trip-edit">Reseuppgifter</button>
+          <button class="secondary-button print-button" type="button" data-action="print-trip">Skriv ut</button>
+        </div>
+      </details>
     </section>
     ${renderCustomForm({ ...ui, customPersons: trip.persons })}
     <section class="pack-list" aria-label="Packrader">
       ${renderPackGroups(visible, trip, core, ui) || '<div class="empty-state">Inga rader matchar visningen. Progressen ovan räknar fortfarande hela resan.</div>'}
     </section>
-    <div class="finish-bar"><span><b>${packed}/${total} packade</b><small>${core.real ? 'Ändringar sparas lokalt först.' : 'Detta är fortfarande en testresa.'}</small></span><button class="primary-button fit-button" type="button" data-action="finish-trip"${packed < total ? ' disabled' : ''}>Avsluta ${core.real ? 'resa' : 'testresa'}</button></div>`;
+    <div class="finish-bar"><span><b>${packed}/${total} packade</b><small>${remaining ? `${remaining} omarkerade rader bevaras oförändrade.` : 'Alla rader är markerade som packade.'}</small></span><button class="primary-button fit-button" type="button" data-action="finish-trip">Avsluta och arkivera</button></div>`;
 }
 
 function renderCatalogForm(core, ui) {
