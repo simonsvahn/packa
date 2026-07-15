@@ -2,7 +2,7 @@
    Cacha endast appskalet. Varken masterdata, Dropbox-svar eller
    framtida arkivexport får någonsin hamna i denna cachelista. */
 const CACHE_PREFIX = 'packa-shell-';
-const CACHE = `${CACHE_PREFIX}2026-07-15-15`;
+const CACHE = `${CACHE_PREFIX}2026-07-15-16`;
 const SHELL = [
   './',
   './index.html',
@@ -39,9 +39,10 @@ const SHELL = [
 ];
 
 self.addEventListener('install', event => {
+  const freshShell = SHELL.map(path => new Request(new URL(path, self.location.href), { cache: 'reload' }));
   event.waitUntil(
     caches.open(CACHE)
-      .then(cache => cache.addAll(SHELL))
+      .then(cache => cache.addAll(freshShell))
       .then(() => self.skipWaiting())
   );
 });
@@ -68,7 +69,7 @@ self.addEventListener('fetch', event => {
   const isNavigation = request.mode === 'navigate';
   if (isNavigation) {
     event.respondWith(
-      fetch(request)
+      fetch(request, { cache: 'no-store' })
         .then(response => {
           if (response.ok) caches.open(CACHE).then(cache => cache.put('./index.html', response.clone()));
           return response;
@@ -79,7 +80,7 @@ self.addEventListener('fetch', event => {
   }
 
   event.respondWith(
-    fetch(request)
+      fetch(request, { cache: 'no-store' })
       .then(response => {
         if (response.ok) caches.open(CACHE).then(cache => cache.put(request, response.clone()));
         return response;

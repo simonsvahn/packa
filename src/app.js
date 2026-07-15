@@ -16,7 +16,7 @@ const title = document.getElementById('view-title');
 const kicker = document.getElementById('view-kicker');
 const ACTIVE_TRIP_KEY = 'packa:active-trip-id';
 const LAST_SYNC_KEY = 'packa:last-successful-dropbox-sync';
-const APP_VERSION = '2026-07-15-15';
+const APP_VERSION = '2026-07-15-16';
 
 function storedLastSyncAt() {
   try {
