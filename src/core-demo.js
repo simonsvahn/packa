@@ -34,7 +34,7 @@ const TRIP_SEED = Object.freeze({
   nights: 2,
   season: 'Sommar',
   company: 'Själv',
-  persons: ['Simon'],
+  persons: ['Testperson'],
   templates: ['Basresa', 'Stad'],
   status: 'planning',
   createdAt: '2026-07-15T08:00:00.000Z',
@@ -94,7 +94,7 @@ function itemFields(catalog, tripId, quantity = 1, overrides = {}) {
     activity: catalog?.activity || overrides.activity || 'Övrigt',
     function: catalog?.function || overrides.function || 'Övrigt',
     templates: catalog?.templates || [],
-    person: overrides.person || 'Simon',
+    person: overrides.person || 'Testperson',
     quantity: Math.max(1, Number(quantity) || 1),
     taken: Boolean(overrides.taken),
     packed: Boolean(overrides.packed),
@@ -141,7 +141,7 @@ export class DemoWorkspace {
   }
 
   catalog() {
-    return this.repository.listEntities(TYPES.catalog).map(valueOf).sort((a, b) => a.name.localeCompare(b.name, 'sv'));
+    return this.repository.listEntities(TYPES.catalog).map(valueOf).map(item => ({ ...item, person: item.person || 'Testperson' })).sort((a, b) => a.name.localeCompare(b.name, 'sv'));
   }
 
   trips() {
@@ -165,19 +165,27 @@ export class DemoWorkspace {
   }
 
   snapshot() {
+    const catalog = this.catalog();
     const trips = this.trips().map(trip => ({ ...trip, items: this.tripItems(trip.id) }));
     return {
       syntheticOnly: true,
-      catalog: this.catalog(),
+      real: false,
+      catalog,
+      allCatalog: catalog,
+      duplicateGroups: [],
       trips,
       activeTripId: this.activeTripId,
       activeTrip: trips.find(trip => trip.id === this.activeTripId) || trips[0] || null,
       templates: [...DEMO_TEMPLATES],
-      bags: [...DEMO_BAGS]
+      bags: [...DEMO_BAGS],
+      pouches: [],
+      bagLibrary: DEMO_BAGS.map((name, index) => ({ id: `demo-bag-${index}`, name, compartments: [], archived: false })),
+      pouchLibrary: [],
+      persons: ['Testperson']
     };
   }
 
-  async createTrip({ name, destination = '', templates = ['Basresa'], sourceTripId = null }) {
+  async createTrip({ name, destination = '', dateFrom = '', nights = null, season = '', companions = '', persons = ['Testperson'], templates = ['Basresa'], notes = '', sourceTripId = null }) {
     const cleanName = String(name || '').trim();
     if (!cleanName) throw new Error('Resan måste ha ett namn');
     const id = randomId('demo-trip', this.crypto);
@@ -187,14 +195,16 @@ export class DemoWorkspace {
     await writeEntity(this.repository, TYPES.trip, id, {
       name: cleanName,
       destination: String(destination || '').trim(),
-      startDate: '',
+      startDate: String(dateFrom || ''),
       endDate: '',
-      nights: null,
-      season: '',
-      company: '',
-      persons: source?.persons || ['Simon'],
+      nights: nights === '' || nights === null ? null : Math.max(0, Number(nights) || 0),
+      season: String(season || ''),
+      company: String(companions || ''),
+      companions: String(companions || ''),
+      persons: source?.persons || [...new Set(persons.length ? persons : ['Testperson'])],
       templates: tripTemplates,
       status: 'planning',
+      notes: String(notes || ''),
       createdAt,
       demo: true,
       basedOn: source?.id || null
@@ -247,6 +257,26 @@ export class DemoWorkspace {
     if (!included) for (const row of rows) await this.repository.deleteEntity(TYPES.item, row.id);
   }
 
+  async setIncludedMany(catalogIds, included) {
+    const unique = [...new Set(catalogIds)].filter(Boolean);
+    for (const catalogId of unique) await this.setIncluded(catalogId, included);
+    return unique.length;
+  }
+
+  async updateTrip(fields = {}) {
+    const map = { name: 'name', destination: 'destination', dateFrom: 'startDate', nights: 'nights', season: 'season', companions: 'company', persons: 'persons', templates: 'templates', notes: 'notes' };
+    for (const [key, target] of Object.entries(map)) {
+      if (Object.hasOwn(fields, key)) await this.repository.setField(TYPES.trip, this.activeTripId, target, fields[key]);
+    }
+  }
+
+  async deleteActiveTrip() {
+    const id = this.activeTripId;
+    for (const row of this.tripItems(id)) await this.repository.deleteEntity(TYPES.item, row.id);
+    await this.repository.deleteEntity(TYPES.trip, id);
+    this.activeTripId = this.trips()[0]?.id || null;
+  }
+
   async setQuantity(itemId, quantity) {
     const next = Math.max(0, Number(quantity) || 0);
     if (next === 0) return this.repository.deleteEntity(TYPES.item, itemId);
@@ -277,6 +307,10 @@ export class DemoWorkspace {
     await this.repository.setField(TYPES.item, itemId, 'location', String(location || '').trim());
   }
 
+  async setPerson(itemId, person) {
+    await this.repository.setField(TYPES.item, itemId, 'person', String(person || 'Testperson'));
+  }
+
   async addCustomItem(name) {
     const cleanName = String(name || '').trim();
     if (!cleanName) throw new Error('Den egna raden måste ha ett namn');
@@ -289,16 +323,17 @@ export class DemoWorkspace {
     return id;
   }
 
-  async splitItem(itemId) {
+  async splitItem(itemId, quantity = 1) {
     const item = this.tripItems().find(row => row.id === itemId);
     if (!item || item.quantity < 2) throw new Error('Det behövs minst två exemplar för att dela raden');
-    await this.repository.setField(TYPES.item, itemId, 'quantity', item.quantity - 1);
+    const splitQuantity = Math.max(1, Math.min(item.quantity - 1, Number(quantity) || 1));
+    await this.repository.setField(TYPES.item, itemId, 'quantity', item.quantity - splitQuantity);
     const id = randomId(`${this.activeTripId}:split`, this.crypto);
     const { id: _sourceId, ...fields } = item;
     await writeEntity(this.repository, TYPES.item, id, {
       ...fields,
       tripId: this.activeTripId,
-      quantity: 1,
+      quantity: splitQuantity,
       bag: '',
       location: '',
       createdAt: new Date().toISOString()

@@ -3,6 +3,7 @@ import { createRealWorkspace } from './real-workspace.js';
 import { VIEW_META, normalizeView, renderView } from './views.js';
 import {
   beginDropboxLiveTest,
+  backupActiveDropboxSession,
   completeDropboxLiveTest,
   hasActiveDropboxSession,
   isDropboxCallback,
@@ -27,13 +28,40 @@ const runtime = {
 const ui = {
   newTripOpen: false,
   newTripTemplates: new Set(['Basresa']),
+  newTripPersons: new Set(),
+  copySourceTripId: null,
+  tripEditOpen: false,
   customRowOpen: false,
   historyTripId: null,
-  filters: { search: '', activities: new Set(), functions: new Set() },
+  filters: { search: '', activities: new Set(), functions: new Set(), persons: new Set() },
+  filtersOpen: typeof window.matchMedia === 'function' ? window.matchMedia('(min-width:821px)').matches : true,
+  tripFilters: { search: '', person: '', season: '' },
+  planGroup: 'category',
+  packGroup: 'category',
+  groupsOpen: true,
   showBags: true,
   hidePacked: false,
-  hideTaken: false
+  hideTaken: false,
+  splitItemId: null,
+  masterArchiveMode: 'active',
+  masterPerson: '',
+  masterEditId: null,
+  masterNewOpen: false,
+  matrixPerson: '',
+  matrixGroup: 'category',
+  matrixTemplates: new Set(),
+  matrixShowArchived: false,
+  habitFilters: null,
+  newBagOpen: false,
+  newPouchOpen: false,
+  editBagId: null,
+  editPouchId: null,
+  restoreReport: null,
+  storageStatus: { supported: false, persisted: null, usage: null, quota: null }
 };
+
+let pendingRestore = null;
+let backgroundSyncPromise = null;
 
 const STATUS_LABEL = {
   offline: 'Offline · lokalt sparat',
@@ -57,6 +85,7 @@ function currentCore() {
 export function showView(value, { updateHash = true } = {}) {
   const view = normalizeView(value);
   const meta = VIEW_META[view];
+  const viewChanged = currentView !== view;
   currentView = view;
   title.textContent = meta.title;
   kicker.textContent = meta.kicker;
@@ -65,6 +94,10 @@ export function showView(value, { updateHash = true } = {}) {
   setCurrentLinks(view);
   document.title = `${meta.title} · Packa`;
   if (updateHash && location.hash !== `#${view}`) history.replaceState(null, '', `#${view}`);
+  if (viewChanged) {
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }
   updateSyncUi();
   return view;
 }
@@ -132,6 +165,67 @@ function toggleSetValue(set, value) {
   else set.add(value);
 }
 
+function formValues(form) {
+  const data = new FormData(form);
+  return {
+    data,
+    text: name => String(data.get(name) || '').trim(),
+    list: name => data.getAll(name).map(value => String(value)).filter(Boolean)
+  };
+}
+
+function downloadText(filename, text, type) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function currentDateStamp() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function preparePersistentStorage() {
+  const storage = navigator.storage;
+  if (!storage) return;
+  const persistedBefore = typeof storage.persisted === 'function' ? await storage.persisted().catch(() => null) : null;
+  const persisted = persistedBefore || (typeof storage.persist === 'function' ? await storage.persist().catch(() => false) : false);
+  const estimate = typeof storage.estimate === 'function' ? await storage.estimate().catch(() => ({})) : {};
+  ui.storageStatus = {
+    supported: true,
+    persisted: Boolean(persisted),
+    usage: Number.isFinite(estimate.usage) ? estimate.usage : null,
+    quota: Number.isFinite(estimate.quota) ? estimate.quota : null
+  };
+  if (currentView === 'data') showView('data');
+}
+
+async function syncOpenSession() {
+  if (!hasActiveDropboxSession() || navigator.onLine === false || backgroundSyncPromise) return backgroundSyncPromise;
+  backgroundSyncPromise = (async () => {
+    try {
+      setSyncState('syncing', 'Kontrollerar ändringar från andra enheter…', { authorized: true });
+      const result = await syncActiveDropboxSession();
+      await realWorkspace?.init();
+      if (realWorkspace?.hasData()) coreWorkspace = realWorkspace;
+      setSyncState('synced', `Synkad. ${result.uploadedOps} lokala ändringar skickades och ${result.downloadedOps} fjärändringar hämtades.`, { authorized: true });
+      showView(currentView);
+      return result;
+    } catch (error) {
+      setSyncState('action_required', `Synken behöver åtgärdas: ${error.message}`, { authorized: true });
+      return null;
+    } finally {
+      backgroundSyncPromise = null;
+    }
+  })();
+  return backgroundSyncPromise;
+}
+
 document.addEventListener('click', async event => {
   const actionTarget = event.target.closest('[data-action]');
   const action = actionTarget?.dataset.action;
@@ -148,23 +242,37 @@ document.addEventListener('click', async event => {
       ui.newTripTemplates.clear();
       if (core.templates[0]) ui.newTripTemplates.add(core.templates[0]);
     }
+    ui.copySourceTripId = null;
+    if (!ui.newTripPersons.size && core?.persons?.[0]) ui.newTripPersons.add(core.persons[0]);
     ui.newTripOpen = true;
     showView('resor');
     return;
   }
   if (action === 'close-new-trip') {
     ui.newTripOpen = false;
+    ui.copySourceTripId = null;
     showView('resor');
     return;
   }
   if (action === 'toggle-new-template') {
     toggleSetValue(ui.newTripTemplates, actionTarget.dataset.template);
-    const active = ui.newTripTemplates.has(actionTarget.dataset.template);
-    actionTarget.classList.toggle('active', active);
-    actionTarget.setAttribute('aria-pressed', String(active));
-    const preview = currentCore().catalog.filter(item => item.templates.some(template => ui.newTripTemplates.has(template))).length;
-    const previewLabel = document.querySelector('.preview-count b');
-    if (previewLabel) previewLabel.textContent = `${preview} artiklar förbockas`;
+    showView('resor');
+    return;
+  }
+  if (action === 'toggle-new-person') {
+    toggleSetValue(ui.newTripPersons, actionTarget.dataset.person);
+    showView('resor');
+    return;
+  }
+  if (action === 'create-template') {
+    const value = typeof window.prompt === 'function' ? window.prompt('Namn på den nya mallen:') : '';
+    if (!value) return;
+    await mutateCore(async () => {
+      if (typeof coreWorkspace.createTemplate !== 'function') throw new Error('Nya mallar kan bara skapas i den privata mastern');
+      const created = await coreWorkspace.createTemplate(value);
+      ui.newTripTemplates.add(created);
+      ui.matrixTemplates.add(created);
+    });
     return;
   }
   if (action === 'open-trip') {
@@ -186,15 +294,43 @@ document.addEventListener('click', async event => {
   if (action === 'copy-trip') {
     const source = currentCore().trips.find(trip => trip.id === actionTarget.dataset.tripId);
     if (!source) return;
-    await mutateCore(() => coreWorkspace.createTrip({
-      name: `${source.name} – kopia`,
-      destination: source.destination,
-      sourceTripId: source.id
-    }), { nextView: 'planera' });
+    ui.copySourceTripId = source.id;
+    ui.newTripOpen = true;
+    ui.historyTripId = null;
+    ui.newTripTemplates = new Set(source.templates || []);
+    ui.newTripPersons = new Set(source.persons || []);
+    showView('resor');
+    return;
+  }
+  if (action === 'open-trip-edit') {
+    ui.tripEditOpen = true;
+    showView(currentView);
+    return;
+  }
+  if (action === 'close-trip-edit') {
+    ui.tripEditOpen = false;
+    showView(currentView);
+    return;
+  }
+  if (action === 'delete-trip') {
+    if (!confirmAction('Ta bort resan helt? Detta kan inte ångras utom via Dropbox-historik eller en JSON-export.')) return;
+    ui.tripEditOpen = false;
+    await mutateCore(() => coreWorkspace.deleteActiveTrip(), { nextView: 'resor' });
+    return;
+  }
+  if (action === 'unlock-trip') {
+    if (!confirmAction('Lås upp resan för redigering? Den återgår till planering.')) return;
+    ui.historyTripId = null;
+    await mutateCore(() => coreWorkspace.unlockTrip(actionTarget.dataset.tripId), { nextView: 'planera' });
+    return;
+  }
+  if (action === 'archive-trip') {
+    if (!confirmAction('Arkivera den klara resan? Den blir skrivskyddad.')) return;
+    await mutateCore(() => coreWorkspace.archiveTrip(actionTarget.dataset.tripId), { nextView: 'resor' });
     return;
   }
   if (action === 'toggle-filter') {
-    const key = actionTarget.dataset.filterKind === 'activity' ? 'activities' : 'functions';
+    const key = actionTarget.dataset.filterKind === 'activity' ? 'activities' : (actionTarget.dataset.filterKind === 'person' ? 'persons' : 'functions');
     toggleSetValue(ui.filters[key], actionTarget.dataset.filterValue);
     showView(currentView);
     return;
@@ -203,6 +339,7 @@ document.addEventListener('click', async event => {
     ui.filters.search = '';
     ui.filters.activities.clear();
     ui.filters.functions.clear();
+    ui.filters.persons.clear();
     showView(currentView);
     return;
   }
@@ -212,6 +349,14 @@ document.addEventListener('click', async event => {
     const rows = currentCore().activeTrip.items.filter(item => item.catalogId === catalogId);
     if (!included && rows.length > 1 && !confirmAction(`Artikeln är uppdelad på ${rows.length} rader. Ta bort alla delrader?`)) return;
     await mutateCore(() => coreWorkspace.setIncluded(catalogId, included));
+    return;
+  }
+  if (action === 'bulk-included') {
+    const ids = String(actionTarget.dataset.catalogIds || '').split(',').filter(Boolean);
+    const included = actionTarget.dataset.included === 'true';
+    if (!ids.length) return;
+    if (!confirmAction(`${included ? 'Lägg till' : 'Ta bort'} ${ids.length} synliga artiklar?`)) return;
+    await mutateCore(() => coreWorkspace.setIncludedMany(ids, included));
     return;
   }
   if (action === 'quantity') {
@@ -248,8 +393,29 @@ document.addEventListener('click', async event => {
     showView('packa');
     return;
   }
-  if (action === 'split-item') {
-    await mutateCore(() => coreWorkspace.splitItem(actionTarget.dataset.itemId));
+  if (action === 'set-plan-group') {
+    ui.planGroup = actionTarget.dataset.group === 'activity' ? 'activity' : 'category';
+    showView('planera');
+    return;
+  }
+  if (action === 'set-pack-group') {
+    ui.packGroup = ['category', 'activity', 'bag'].includes(actionTarget.dataset.group) ? actionTarget.dataset.group : 'category';
+    showView('packa');
+    return;
+  }
+  if (action === 'set-groups-open') {
+    ui.groupsOpen = actionTarget.dataset.open === 'true';
+    showView('planera');
+    return;
+  }
+  if (action === 'open-split') {
+    ui.splitItemId = actionTarget.dataset.itemId;
+    showView('packa');
+    return;
+  }
+  if (action === 'close-split') {
+    ui.splitItemId = null;
+    showView('packa');
     return;
   }
   if (action === 'merge-items') {
@@ -261,11 +427,124 @@ document.addEventListener('click', async event => {
     await mutateCore(() => coreWorkspace.setTripStatus('complete'), { nextView: 'resor' });
     return;
   }
+  if (action === 'clear-trip-filters') {
+    ui.tripFilters = { search: '', person: '', season: '' };
+    showView('resor');
+    return;
+  }
+  if (action === 'print-trip') {
+    if (!currentCore()?.activeTrip) {
+      runtime.error = 'Välj en resa innan du skriver ut.';
+      showView(currentView);
+      return;
+    }
+    window.print?.();
+    return;
+  }
+
+  if (action === 'open-new-catalog') {
+    ui.masterNewOpen = true;
+    ui.masterEditId = null;
+    showView('master');
+    return;
+  }
+  if (action === 'edit-catalog') {
+    ui.masterEditId = actionTarget.dataset.itemId;
+    ui.masterNewOpen = false;
+    showView('master');
+    return;
+  }
+  if (action === 'close-catalog-editor') {
+    ui.masterEditId = null;
+    ui.masterNewOpen = false;
+    showView('master');
+    return;
+  }
+  if (action === 'set-master-archive') {
+    ui.masterArchiveMode = actionTarget.dataset.mode;
+    showView('master');
+    return;
+  }
+  if (action === 'set-catalog-archived') {
+    const archived = actionTarget.dataset.archived === 'true';
+    if (archived && !confirmAction('Arkivera artikeln? Historiken ligger kvar och artikeln kan återställas.')) return;
+    await mutateCore(() => coreWorkspace.setCatalogArchived(actionTarget.dataset.itemId, archived), { nextView: 'master' });
+    return;
+  }
+  if (action === 'toggle-matrix-template') {
+    toggleSetValue(ui.matrixTemplates, actionTarget.dataset.template);
+    showView('matris');
+    return;
+  }
+  if (action === 'set-matrix-group') {
+    ui.matrixGroup = ['category', 'activity', 'function'].includes(actionTarget.dataset.group) ? actionTarget.dataset.group : 'category';
+    showView('matris');
+    return;
+  }
+  if (action === 'toggle-catalog-template') {
+    await mutateCore(() => coreWorkspace.toggleCatalogTemplate(actionTarget.dataset.itemId, actionTarget.dataset.template), { nextView: 'matris' });
+    return;
+  }
+  if (action === 'open-new-bag') {
+    ui.newBagOpen = !ui.newBagOpen;
+    ui.editBagId = null;
+    showView('bibliotek');
+    return;
+  }
+  if (action === 'open-new-pouch') {
+    ui.newPouchOpen = !ui.newPouchOpen;
+    ui.editPouchId = null;
+    showView('bibliotek');
+    return;
+  }
+  if (action === 'edit-bag') {
+    ui.editBagId = actionTarget.dataset.bagId;
+    ui.newBagOpen = false;
+    showView('bibliotek');
+    return;
+  }
+  if (action === 'edit-pouch') {
+    ui.editPouchId = actionTarget.dataset.pouchId;
+    ui.newPouchOpen = false;
+    showView('bibliotek');
+    return;
+  }
+  if (action === 'set-bag-archived') {
+    await mutateCore(() => coreWorkspace.updateBag(actionTarget.dataset.bagId, { archived: actionTarget.dataset.archived === 'true' }), { nextView: 'bibliotek' });
+    return;
+  }
+  if (action === 'set-pouch-archived') {
+    await mutateCore(() => coreWorkspace.updatePouch(actionTarget.dataset.pouchId, { archived: actionTarget.dataset.archived === 'true' }), { nextView: 'bibliotek' });
+    return;
+  }
+  if (action === 'export-json') {
+    downloadText(`packa-backup-${currentDateStamp()}.json`, JSON.stringify(coreWorkspace.exportLegacy(), null, 2), 'application/json;charset=utf-8');
+    return;
+  }
+  if (action === 'export-csv') {
+    downloadText(`packa-artikelmaster-${currentDateStamp()}.csv`, coreWorkspace.exportCatalogCsv(), 'text/csv;charset=utf-8');
+    return;
+  }
+  if (action === 'restore-archive') {
+    if (!pendingRestore || !ui.restoreReport) return;
+    if (!confirmAction(`Återställ ${ui.restoreReport.items} artiklar och ${ui.restoreReport.trips} resor? Exportera gärna nuvarande JSON först. Åtgärden synkas som nya operationer.`)) return;
+    const before = coreWorkspace.exportLegacy();
+    const backupName = `packa-before-restore-${new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-')}.json`;
+    downloadText(backupName, JSON.stringify(before, null, 2), 'application/json;charset=utf-8');
+    await mutateCore(async () => {
+      if (hasActiveDropboxSession()) await backupActiveDropboxSession(backupName, before);
+      await coreWorkspace.restoreArchive(pendingRestore);
+    }, { nextView: 'resor' });
+    pendingRestore = null;
+    ui.restoreReport = null;
+    return;
+  }
 
   const link = event.target.closest('[data-view-link]');
   if (!link) return;
   event.preventDefault();
   ui.customRowOpen = false;
+  document.querySelector('.mobile-more')?.removeAttribute('open');
   showView(link.dataset.viewLink);
 });
 
@@ -273,24 +552,91 @@ document.addEventListener('submit', async event => {
   const form = event.target.closest('[data-form]');
   if (!form) return;
   event.preventDefault();
-  const values = new FormData(form);
+  const values = formValues(form);
   if (form.dataset.form === 'new-trip') {
     await mutateCore(() => coreWorkspace.createTrip({
-      name: values.get('name'),
-      destination: values.get('destination'),
-      templates: [...ui.newTripTemplates]
+      name: values.text('name'),
+      destination: values.text('destination'),
+      dateFrom: values.text('dateFrom'),
+      nights: values.text('nights'),
+      season: values.text('season'),
+      companions: values.text('companions'),
+      notes: values.text('notes'),
+      persons: [...ui.newTripPersons],
+      templates: [...ui.newTripTemplates],
+      sourceTripId: values.text('sourceTripId') || null
     }), { nextView: 'planera' });
     ui.newTripOpen = false;
+    ui.copySourceTripId = null;
+    return;
+  }
+  if (form.dataset.form === 'edit-trip') {
+    ui.tripEditOpen = false;
+    await mutateCore(() => coreWorkspace.updateTrip({
+      name: values.text('name'), destination: values.text('destination'), dateFrom: values.text('dateFrom'), nights: values.text('nights'),
+      season: values.text('season'), companions: values.text('companions'), notes: values.text('notes'), persons: values.list('persons'), templates: values.list('templates')
+    }));
     return;
   }
   if (form.dataset.form === 'filter-search') {
-    ui.filters.search = String(values.get('search') || '');
+    ui.filters.search = values.text('search');
     showView(currentView);
+    return;
+  }
+  if (form.dataset.form === 'trip-filter') {
+    ui.tripFilters = { search: values.text('search'), person: values.text('person'), season: values.text('season') };
+    showView('resor');
     return;
   }
   if (form.dataset.form === 'custom-item') {
     ui.customRowOpen = false;
-    await mutateCore(() => coreWorkspace.addCustomItem(values.get('name')));
+    await mutateCore(() => coreWorkspace.addCustomItem(values.text('name'), values.text('person')));
+    return;
+  }
+  if (form.dataset.form === 'split-item') {
+    ui.splitItemId = null;
+    await mutateCore(() => coreWorkspace.splitItem(values.text('itemId'), Number(values.text('quantity')) || 1), { nextView: 'packa' });
+    return;
+  }
+  if (form.dataset.form === 'new-catalog' || form.dataset.form === 'edit-catalog') {
+    const fields = {
+      name: values.text('name'), person: values.text('person'), category: values.text('category'), department: values.text('department'),
+      function: values.text('function'), templates: values.list('templates'), brand: values.text('brand'), model: values.text('model'),
+      weight: values.text('weight'), comment: values.text('comment'), howToPack: values.text('howToPack')
+    };
+    if (form.dataset.form === 'new-catalog') {
+      const duplicate = (currentCore().allCatalog || currentCore().catalog).find(item => !item.archived && item.person === fields.person && item.name.toLocaleLowerCase('sv') === fields.name.toLocaleLowerCase('sv'));
+      if (duplicate && !confirmAction(`${duplicate.name} finns redan för ${duplicate.person}. Skapa ändå?`)) return;
+      ui.masterNewOpen = false;
+      ui.masterEditId = null;
+      await mutateCore(() => coreWorkspace.createCatalogItem(fields), { nextView: 'master' });
+    } else {
+      ui.masterNewOpen = false;
+      ui.masterEditId = null;
+      await mutateCore(() => coreWorkspace.updateCatalogItem(values.text('itemId'), fields), { nextView: 'master' });
+    }
+    return;
+  }
+  if (form.dataset.form === 'habit-filter') {
+    ui.habitFilters = {
+      person: values.text('person'), template: values.text('template'), season: values.text('season'), function: values.text('function'),
+      search: values.text('search'), never: values.data.get('never') === 'on'
+    };
+    showView('vanor');
+    return;
+  }
+  if (form.dataset.form === 'new-bag' || form.dataset.form === 'edit-bag') {
+    ui.newBagOpen = false;
+    ui.editBagId = null;
+    const fields = { name: values.text('name'), compartments: values.text('compartments').split(',').map(value => value.trim()).filter(Boolean) };
+    await mutateCore(() => form.dataset.form === 'edit-bag' ? coreWorkspace.updateBag(values.text('bagId'), fields) : coreWorkspace.createBag(fields), { nextView: 'bibliotek' });
+    return;
+  }
+  if (form.dataset.form === 'new-pouch' || form.dataset.form === 'edit-pouch') {
+    ui.newPouchOpen = false;
+    ui.editPouchId = null;
+    await mutateCore(() => form.dataset.form === 'edit-pouch' ? coreWorkspace.updatePouch(values.text('pouchId'), { name: values.text('name') }) : coreWorkspace.createPouch(values.text('name')), { nextView: 'bibliotek' });
+    return;
   }
 });
 
@@ -303,16 +649,67 @@ document.addEventListener('change', async event => {
   if (control.dataset.action === 'set-location') {
     await mutateCore(() => coreWorkspace.setLocation(control.dataset.itemId, control.value));
   }
+  if (control.dataset.action === 'set-person') {
+    await mutateCore(() => coreWorkspace.setPerson(control.dataset.itemId, control.value));
+  }
+  if (control.dataset.action === 'set-master-person') {
+    ui.masterPerson = control.value;
+    showView('master');
+  }
+  if (control.dataset.action === 'set-matrix-person') {
+    ui.matrixPerson = control.value;
+    showView('matris');
+  }
+  if (control.dataset.action === 'toggle-matrix-archived') {
+    ui.matrixShowArchived = control.checked;
+    showView('matris');
+  }
+  if (control.dataset.action === 'select-restore-file') {
+    const file = control.files?.[0];
+    if (!file) return;
+    try {
+      const text = typeof file.text === 'function' ? await file.text() : await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(file);
+      });
+      pendingRestore = JSON.parse(text);
+      ui.restoreReport = coreWorkspace.validateArchive(pendingRestore);
+      runtime.error = '';
+    } catch (error) {
+      pendingRestore = null;
+      ui.restoreReport = null;
+      runtime.error = `Arkivfilen kunde inte valideras: ${error.message}`;
+    }
+    showView('data');
+  }
 });
 
+document.addEventListener('toggle', event => {
+  if (event.target.matches?.('.filter-panel')) ui.filtersOpen = event.target.open;
+}, true);
+
 window.addEventListener('hashchange', () => showView(location.hash, { updateHash: false }));
-window.addEventListener('online', updateConnectionState);
+window.addEventListener('online', () => { updateConnectionState(); syncOpenSession(); });
 window.addEventListener('offline', updateConnectionState);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncOpenSession(); });
 
 export async function registerServiceWorker() {
   if (!('serviceWorker' in navigator) || location.protocol === 'file:') return null;
   try {
-    return await navigator.serviceWorker.register('./sw.js', { scope: './' });
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    const registration = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+    registration.update?.().catch?.(() => {});
+    if (hadController && typeof navigator.serviceWorker.addEventListener === 'function') {
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        const key = 'packa:sw-reloaded';
+        if (sessionStorage.getItem(key)) return;
+        sessionStorage.setItem(key, '1');
+        location.reload();
+      }, { once: true });
+    }
+    return registration;
   } catch (error) {
     console.warn('Service Worker kunde inte registreras.', error);
     return null;
@@ -330,6 +727,7 @@ try {
 showView(currentView, { updateHash: !location.hash });
 updateConnectionState();
 registerServiceWorker();
+preparePersistentStorage();
 
 if (isDropboxCallback()) {
   setSyncState('syncing', 'Verifierar Dropbox och hämtar dina privata resor…');

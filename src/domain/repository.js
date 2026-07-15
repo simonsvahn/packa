@@ -53,10 +53,33 @@ export class Repository {
     return operation;
   }
 
+  async commitMany(factories) {
+    this.assertReady();
+    if (!Array.isArray(factories) || !factories.length) return [];
+    const operations = factories.map((factory, index) => factory(this.seq + index + 1, this.clock.tick()));
+    await this.store.appendOps(operations);
+    this.state.applyAll(operations);
+    this.seq += operations.length;
+    await this.store.putMeta(`seq:${this.deviceId}`, this.seq);
+    return operations;
+  }
+
   setField(entityType, entityId, field, value) {
     return this.commit((seq, hlc) => createSetOperation({
       deviceId: this.deviceId, seq, entityType, entityId, field, value, hlc
     }));
+  }
+
+  setFields(entries) {
+    return this.commitMany(entries.map(entry => (seq, hlc) => createSetOperation({
+      deviceId: this.deviceId,
+      seq,
+      entityType: entry.entityType,
+      entityId: entry.entityId,
+      field: entry.field,
+      value: entry.value,
+      hlc
+    })));
   }
 
   deleteEntity(entityType, entityId) {
@@ -65,10 +88,30 @@ export class Repository {
     }));
   }
 
+  deleteEntities(entries) {
+    return this.commitMany(entries.map(entry => (seq, hlc) => createDeleteOperation({
+      deviceId: this.deviceId,
+      seq,
+      entityType: entry.entityType,
+      entityId: entry.entityId,
+      hlc
+    })));
+  }
+
   restoreEntity(entityType, entityId) {
     return this.commit((seq, hlc) => createRestoreOperation({
       deviceId: this.deviceId, seq, entityType, entityId, hlc
     }));
+  }
+
+  restoreEntities(entries) {
+    return this.commitMany(entries.map(entry => (seq, hlc) => createRestoreOperation({
+      deviceId: this.deviceId,
+      seq,
+      entityType: entry.entityType,
+      entityId: entry.entityId,
+      hlc
+    })));
   }
 
   async applyRemoteOps(ops) {

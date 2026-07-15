@@ -115,3 +115,10 @@ export async function syncActiveDropboxSession() {
   if (!activeSession) return null;
   return activeSession.syncEngine.syncOnce();
 }
+
+export async function backupActiveDropboxSession(filename, value) {
+  if (!activeSession) return null;
+  const safeName = String(filename || '').replace(/[^a-zA-Z0-9._-]/g, '-');
+  if (!safeName.endsWith('.json')) throw new Error('Dropbox-backup måste vara en JSON-fil');
+  return activeSession.transport.putMutable(`/archive/${safeName}`, value);
+}
