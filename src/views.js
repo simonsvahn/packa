@@ -33,11 +33,7 @@ const statusLabel = status => ({
   archived: 'Arkiverad'
 }[status] || status);
 
-const dataBoundary = (core, compact = false) => core?.real ? `
-  <div class="demo-boundary real-boundary${compact ? ' compact-boundary' : ''}" role="status">
-    <span aria-hidden="true">🔒</span>
-    <div><b>Visar dina privata resor</b><small>Lokalt sparat på den här enheten</small><span class="boundary-copy"> Synk- och versionsdetaljer finns under Mer → Status och version.</span></div>
-  </div>` : `
+const dataBoundary = (core, compact = false) => core?.real ? '' : `
   <div class="demo-boundary${compact ? ' compact-boundary' : ''}" role="note">
     <span aria-hidden="true">◇</span>
     <div><b>Säker testyta</b><span class="boundary-copy"> Allt du gör här sparas som syntetiska demo-operationer i en separat lokal databas. Originalmastern och Dropbox-testets databas berörs inte.</span></div>
@@ -566,7 +562,10 @@ function renderStatus(core, status = {}, error = '') {
   const itemWord = core.real ? (core.catalog.length === 1 ? 'aktiv artikel' : 'aktiva artiklar') : (core.catalog.length === 1 ? 'testartikel' : 'testartiklar');
   const localData = `${core.trips.length} ${tripWord} · ${core.catalog.length} ${itemWord}`;
   const lastSync = status.lastSync || 'Ingen lyckad synk registrerad på den här enheten';
-  const syncButton = status.dropboxAuthorized ? 'Synka nu' : (core.real ? 'Anslut Dropbox och synka' : 'Anslut Dropbox och hämta privata resor');
+  const syncButton = status.dropboxAuthorized ? 'Synka nu' : (status.dropboxCredentialStored ? 'Anslut Dropbox igen' : (core.real ? 'Anslut Dropbox och synka' : 'Anslut Dropbox och hämta privata resor'));
+  const dropboxSession = status.dropboxAuthorized
+    ? 'Aktiv – automatisk synk är igång'
+    : (status.dropboxCredentialStored ? 'Sparad behörighet finns men kunde inte aktiveras' : 'Inte ansluten på den här enheten');
   return `<section class="hero compact-hero status-hero"><div><p class="eyebrow">Två separata lager</p><h2>Data och appversion.</h2><p>Här ser du om dina privata resor har synkats och om den senaste Packa-versionen körs.</p></div></section>
     ${error ? `<div class="error-notice" role="alert">${escapeHtml(error)}</div>` : ''}
     <div class="status-grid">
@@ -575,9 +574,9 @@ function renderStatus(core, status = {}, error = '') {
         <dl class="status-facts">
           <div><dt>På enheten</dt><dd>${escapeHtml(localData)}</dd></div>
           <div><dt>Senast lyckad synk</dt><dd data-status-last-sync>${escapeHtml(lastSync)}</dd></div>
-          <div><dt>Dropbox-session</dt><dd data-status-dropbox-session>${status.dropboxAuthorized ? 'Aktiv i den öppna appen' : 'Inte aktiv – ny behörighet behövs'}</dd></div>
+          <div><dt>Dropbox-anslutning</dt><dd data-status-dropbox-session>${escapeHtml(dropboxSession)}</dd></div>
         </dl>
-        <button class="primary-button full-button" type="button" data-action="connect-dropbox" data-sync-label="status">${escapeHtml(syncButton)}</button>
+        <div class="status-actions"><button class="primary-button full-button" type="button" data-action="connect-dropbox" data-sync-label="status">${escapeHtml(syncButton)}</button>${status.dropboxCredentialStored || status.dropboxAuthorized ? '<button class="text-button" type="button" data-action="disconnect-dropbox">Koppla från Dropbox på denna enhet</button>' : ''}</div>
         <p class="status-detail" data-sync-detail>${escapeHtml(status.syncDetail || 'Dropbox-status läses in…')}</p>
       </section>
       <section class="card status-card" aria-labelledby="app-status-title">

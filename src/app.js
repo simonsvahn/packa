@@ -5,8 +5,11 @@ import {
   beginDropboxLiveTest,
   backupActiveDropboxSession,
   completeDropboxLiveTest,
+  disconnectDropboxSession,
   hasActiveDropboxSession,
+  hasStoredDropboxCredential,
   isDropboxCallback,
+  restoreDropboxLiveSession,
   syncActiveDropboxSession
 } from './dropbox-live.js';
 
@@ -16,7 +19,7 @@ const title = document.getElementById('view-title');
 const kicker = document.getElementById('view-kicker');
 const ACTIVE_TRIP_KEY = 'packa:active-trip-id';
 const LAST_SYNC_KEY = 'packa:last-successful-dropbox-sync';
-const APP_VERSION = '2026-07-15-16';
+const APP_VERSION = '2026-07-15-17';
 
 function storedLastSyncAt() {
   try {
@@ -32,6 +35,7 @@ let coreWorkspace = null;
 let realWorkspace = null;
 const runtime = {
   dropboxAuthorized: false,
+  dropboxCredentialStored: false,
   syncStatus: navigator.onLine === false ? 'offline' : 'local_saved',
   detail: 'Anslut Dropbox för att hämta dina befintliga resor.',
   lastSyncedAt: storedLastSyncAt(),
@@ -78,6 +82,7 @@ const ui = {
 
 let pendingRestore = null;
 let backgroundSyncPromise = null;
+let restoreDropboxPromise = null;
 let serviceWorkerRegistration = null;
 
 function setCurrentLinks(view) {
@@ -168,6 +173,7 @@ function statusViewModel() {
     syncDetail: runtime.detail,
     lastSync: formattedLastSync(false),
     dropboxAuthorized: runtime.dropboxAuthorized,
+    dropboxCredentialStored: runtime.dropboxCredentialStored,
     appVersion: APP_VERSION,
     appUpdateLabel: appUpdateLabel(),
     appUpdateDetail: runtime.appUpdateDetail
@@ -178,12 +184,16 @@ function updateSyncUi() {
   document.querySelectorAll('[data-sync-detail]').forEach(el => { el.textContent = runtime.detail; });
   document.querySelectorAll('[data-status-sync-state]').forEach(el => { el.textContent = connectionText(false); });
   document.querySelectorAll('[data-status-last-sync]').forEach(el => { el.textContent = formattedLastSync(false) || 'Ingen lyckad synk registrerad på den här enheten'; });
-  document.querySelectorAll('[data-status-dropbox-session]').forEach(el => { el.textContent = runtime.dropboxAuthorized ? 'Aktiv i den öppna appen' : 'Inte aktiv – ny behörighet behövs'; });
+  document.querySelectorAll('[data-status-dropbox-session]').forEach(el => {
+    el.textContent = runtime.dropboxAuthorized
+      ? 'Aktiv – automatisk synk är igång'
+      : (runtime.dropboxCredentialStored ? 'Sparad behörighet finns men kunde inte aktiveras' : 'Inte ansluten på den här enheten');
+  });
   document.querySelectorAll('[data-action="connect-dropbox"]').forEach(button => {
     const realData = Boolean(currentCore()?.real);
     button.disabled = runtime.syncStatus === 'syncing';
     if (runtime.syncStatus === 'syncing') button.textContent = 'Synkar privata resor…';
-    else if (button.dataset.syncLabel === 'status') button.textContent = runtime.dropboxAuthorized ? 'Synka nu' : (realData ? 'Anslut Dropbox och synka' : 'Anslut Dropbox och hämta privata resor');
+    else if (button.dataset.syncLabel === 'status') button.textContent = runtime.dropboxAuthorized ? 'Synka nu' : (runtime.dropboxCredentialStored ? 'Anslut Dropbox igen' : (realData ? 'Anslut Dropbox och synka' : 'Anslut Dropbox och hämta privata resor'));
     else button.textContent = runtime.dropboxAuthorized || realData ? 'Synka privata resor med Dropbox' : 'Anslut Dropbox och hämta mina resor';
   });
   updateConnectionState();
@@ -209,6 +219,7 @@ function setSyncState(syncStatus, detail, { authorized = runtime.dropboxAuthoriz
   runtime.syncStatus = syncStatus;
   runtime.detail = detail;
   runtime.dropboxAuthorized = authorized;
+  if (authorized) runtime.dropboxCredentialStored = true;
   if (syncStatus === 'synced') {
     runtime.lastSyncedAt = new Date().toISOString();
     try { localStorage.setItem(LAST_SYNC_KEY, runtime.lastSyncedAt); } catch {
@@ -314,6 +325,45 @@ async function syncOpenSession() {
   return backgroundSyncPromise;
 }
 
+async function restorePersistedDropboxSession() {
+  if (restoreDropboxPromise) return restoreDropboxPromise;
+  restoreDropboxPromise = (async () => {
+    if (!realWorkspace?.repository) return null;
+    runtime.dropboxCredentialStored = await hasStoredDropboxCredential(realWorkspace.repository);
+    if (!runtime.dropboxCredentialStored) {
+      updateSyncUi();
+      return null;
+    }
+    if (navigator.onLine === false) {
+      setSyncState('offline', 'Dropbox-behörigheten är sparad. Synken återupptas automatiskt när enheten är online.', { authorized: false });
+      showView(currentView);
+      return null;
+    }
+    setSyncState('syncing', 'Återansluter till Dropbox och kontrollerar ändringar från andra enheter…', { authorized: false });
+    try {
+      const result = await restoreDropboxLiveSession({ repository: realWorkspace.repository });
+      if (!result) return null;
+      await realWorkspace.init({ preferredTripId: currentCore()?.activeTripId || storedActiveTripId() });
+      if (!realWorkspace.hasData()) throw new Error('Dropbox-synken slutfördes men ingen master hittades');
+      coreWorkspace = realWorkspace;
+      rememberActiveTrip();
+      setSyncState('synced', `Automatisk synk klar. ${result.uploadedOps} lokala ändringar skickades och ${result.downloadedOps} ändringar hämtades.`, { authorized: true });
+      showView(currentView);
+      return result;
+    } catch (error) {
+      console.error('Dropbox kunde inte återanslutas.', error);
+      setSyncState('action_required', `Dropbox kunde inte återanslutas: ${error.message}`, { authorized: false });
+      showView(currentView);
+      return null;
+    }
+  })();
+  try {
+    return await restoreDropboxPromise;
+  } finally {
+    restoreDropboxPromise = null;
+  }
+}
+
 async function checkAppUpdate() {
   if (navigator.onLine === false) {
     setAppUpdateState('offline', 'Anslut till internet för att söka efter en ny version.');
@@ -352,6 +402,15 @@ document.addEventListener('click', async event => {
     }
     setSyncState('syncing', 'Öppnar Dropbox-auktorisering…');
     beginDropboxLiveTest().catch(error => setSyncState('action_required', error.message));
+    return;
+  }
+  if (action === 'disconnect-dropbox') {
+    if (!confirmAction('Koppla från Dropbox på den här enheten? Dina lokala resor ligger kvar.')) return;
+    await disconnectDropboxSession(realWorkspace?.repository);
+    runtime.dropboxAuthorized = false;
+    runtime.dropboxCredentialStored = false;
+    setSyncState('local_saved', 'Dropbox är frånkopplad på den här enheten. Dina resor ligger kvar lokalt.', { authorized: false });
+    showView('status');
     return;
   }
   if (action === 'check-app-update') {
@@ -823,12 +882,21 @@ document.addEventListener('toggle', event => {
 }, true);
 
 window.addEventListener('hashchange', () => showView(location.hash, { updateHash: false }));
-window.addEventListener('online', () => { updateConnectionState(); syncOpenSession(); checkAppUpdate(); });
+window.addEventListener('online', () => {
+  updateConnectionState();
+  if (hasActiveDropboxSession()) syncOpenSession();
+  else restorePersistedDropboxSession();
+  checkAppUpdate();
+});
 window.addEventListener('offline', () => {
   updateConnectionState();
   setAppUpdateState('offline', `Version ${APP_VERSION} körs. Anslut till internet för att kontrollera om en nyare version finns.`);
 });
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncOpenSession(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (hasActiveDropboxSession()) syncOpenSession();
+  else if (runtime.dropboxCredentialStored) restorePersistedDropboxSession();
+});
 
 export async function registerServiceWorker() {
   if (!('serviceWorker' in navigator) || location.protocol === 'file:') {
@@ -905,9 +973,12 @@ if (isDropboxCallback()) {
     })
     .catch(error => {
       console.error('Dropbox-synken stoppades.', error);
-      history.replaceState(null, '', `${new URL('./', location.href).href}#resor`);
+      history.replaceState(null, '', `${new URL('./', location.href).href}#status`);
       setSyncState('action_required', `Dropbox-synken stoppades: ${error.message}`);
+      showView('status');
     });
+} else {
+  restorePersistedDropboxSession();
 }
 
 window.__PACKA__ = Object.freeze({
@@ -917,6 +988,7 @@ window.__PACKA__ = Object.freeze({
   get demoOnly() { return !currentCore()?.real; },
   get demoSnapshot() { return currentCore(); },
   get dropboxAuthorized() { return runtime.dropboxAuthorized; },
+  get dropboxCredentialStored() { return runtime.dropboxCredentialStored; },
   get syncStatus() { return runtime.syncStatus; },
   get lastSyncedAt() { return runtime.lastSyncedAt; },
   get appVersion() { return APP_VERSION; },

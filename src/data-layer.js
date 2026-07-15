@@ -19,6 +19,6 @@ export { DropboxTransport } from './sync/dropbox-transport.js';
 export { CursorResetError, TransportError } from './sync/errors.js';
 export { MemoryRemoteTransport } from './sync/memory-transport.js';
 export { beginDropboxOAuth, clearPendingDropboxOAuth, completeDropboxOAuth } from './sync/oauth-flow.js';
-export { buildDropboxAuthorizationUrl, createOAuthState, createPkcePair, exchangeDropboxCode } from './sync/oauth-pkce.js';
+export { buildDropboxAuthorizationUrl, createOAuthState, createPkcePair, exchangeDropboxCode, exchangeDropboxRefreshToken } from './sync/oauth-pkce.js';
 export { SYNC_STATUS, SYNC_STATUS_LABEL, SyncSession } from './sync/session.js';
 export { SyncEngine } from './sync/sync-engine.js';

@@ -22,7 +22,7 @@ export function createOAuthState({ crypto = globalThis.crypto } = {}) {
   return base64Url(random);
 }
 
-export function buildDropboxAuthorizationUrl({ clientId, redirectUri, challenge, state, scopes = [] }) {
+export function buildDropboxAuthorizationUrl({ clientId, redirectUri, challenge, state, scopes = [], tokenAccessType = 'offline' }) {
   if (!clientId || !redirectUri || !challenge || !state) throw new TypeError('OAuth-parametrar saknas');
   const url = new URL('https://www.dropbox.com/oauth2/authorize');
   url.searchParams.set('client_id', clientId);
@@ -32,6 +32,7 @@ export function buildDropboxAuthorizationUrl({ clientId, redirectUri, challenge,
   url.searchParams.set('code_challenge', challenge);
   url.searchParams.set('state', state);
   if (scopes.length) url.searchParams.set('scope', scopes.join(' '));
+  if (tokenAccessType) url.searchParams.set('token_access_type', tokenAccessType);
   return url.toString();
 }
 
@@ -51,5 +52,23 @@ export async function exchangeDropboxCode({ clientId, redirectUri, code, verifie
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || !payload.access_token) throw new Error(payload.error_description || payload.error || `Dropbox OAuth misslyckades (${response.status})`);
+  return payload;
+}
+
+export async function exchangeDropboxRefreshToken({ clientId, refreshToken, fetchImpl = (...args) => globalThis.fetch(...args) }) {
+  if (!clientId || !refreshToken) throw new TypeError('Dropbox refresh-parametrar saknas');
+  if (!fetchImpl) throw new Error('fetch saknas');
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+    client_id: clientId
+  });
+  const response = await fetchImpl.call(globalThis, 'https://api.dropboxapi.com/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.access_token) throw new Error(payload.error_description || payload.error || `Dropbox tokenförnyelse misslyckades (${response.status})`);
   return payload;
 }
