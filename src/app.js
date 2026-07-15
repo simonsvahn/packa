@@ -36,6 +36,7 @@ const ui = {
   filters: { search: '', activities: new Set(), functions: new Set(), persons: new Set() },
   filtersOpen: typeof window.matchMedia === 'function' ? window.matchMedia('(min-width:821px)').matches : true,
   tripFilters: { search: '', person: '', season: '' },
+  tripFiltersOpen: typeof window.matchMedia === 'function' ? window.matchMedia('(min-width:821px)').matches : true,
   planGroup: 'category',
   packGroup: 'category',
   groupsOpen: true,
@@ -616,6 +617,7 @@ document.addEventListener('submit', async event => {
   }
   if (form.dataset.form === 'trip-filter') {
     ui.tripFilters = { search: values.text('search'), person: values.text('person'), season: values.text('season') };
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(max-width:820px)').matches) ui.tripFiltersOpen = false;
     showView('resor');
     return;
   }
@@ -719,6 +721,7 @@ document.addEventListener('change', async event => {
 
 document.addEventListener('toggle', event => {
   if (event.target.matches?.('.filter-panel')) ui.filtersOpen = event.target.open;
+  if (event.target.matches?.('.trip-filter-panel')) ui.tripFiltersOpen = event.target.open;
 }, true);
 
 window.addEventListener('hashchange', () => showView(location.hash, { updateHash: false }));

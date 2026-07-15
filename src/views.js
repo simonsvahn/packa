@@ -174,8 +174,9 @@ function renderResor(core, ui, error) {
     return true;
   });
   const seasons = [...new Set(core.trips.map(trip => trip.season).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'sv'));
+  const activeTripFilters = Number(Boolean(tripFilter.search)) + Number(Boolean(tripFilter.person)) + Number(Boolean(tripFilter.season));
   return `
-    <section class="hero compact-hero">
+    <section class="hero compact-hero resor-hero">
       <div>
         <p class="eyebrow">${real ? 'Din packhistorik' : 'Etapp 4 · första säkra delen'}</p>
         <h2>${real ? `${core.trips.length} resor finns nu i Packa.` : 'Nu går det att prova Resor → Planera → Packa.'}</h2>
@@ -183,11 +184,14 @@ function renderResor(core, ui, error) {
       </div>
       <button class="primary-button fit-button hero-action" type="button" data-action="open-new-trip">+ ${real ? 'Ny resa' : 'Ny testresa'}</button>
     </section>
-    ${dataBoundary(core)}
+    ${dataBoundary(core, true)}
     ${error ? `<div class="error-notice" role="alert">${escapeHtml(error)}</div>` : ''}
     ${renderNewTrip(core, ui)}
     ${renderHistoryDetail(core, ui)}
-    <form class="trip-filter-bar" data-form="trip-filter" aria-label="Filtrera resor"><label>Sök <input type="search" name="search" value="${escapeHtml(tripFilter.search)}" placeholder="Namn eller destination"></label><label>Person <select name="person"><option value="">Alla</option>${(core.persons || []).map(person => `<option value="${escapeHtml(person)}"${tripFilter.person === person ? ' selected' : ''}>${escapeHtml(person)}</option>`).join('')}</select></label><label>Säsong <select name="season"><option value="">Alla</option>${seasons.map(season => `<option value="${escapeHtml(season)}"${tripFilter.season === season ? ' selected' : ''}>${escapeHtml(season)}</option>`).join('')}</select></label><button class="secondary-button" type="submit">Filtrera</button><button class="text-button" type="button" data-action="clear-trip-filters">Rensa</button></form>
+    <details class="trip-filter-panel"${ui.tripFiltersOpen === false ? '' : ' open'}>
+      <summary><span>Sök och filtrera</span><small>${activeTripFilters ? `${activeTripFilters} aktiva` : `${visibleTrips.length} resor`}</small></summary>
+      <form class="trip-filter-bar" data-form="trip-filter" aria-label="Filtrera resor"><label>Sök <input type="search" name="search" value="${escapeHtml(tripFilter.search)}" placeholder="Namn eller destination"></label><label>Person <select name="person"><option value="">Alla</option>${(core.persons || []).map(person => `<option value="${escapeHtml(person)}"${tripFilter.person === person ? ' selected' : ''}>${escapeHtml(person)}</option>`).join('')}</select></label><label>Säsong <select name="season"><option value="">Alla</option>${seasons.map(season => `<option value="${escapeHtml(season)}"${tripFilter.season === season ? ' selected' : ''}>${escapeHtml(season)}</option>`).join('')}</select></label><button class="secondary-button" type="submit">Filtrera</button><button class="text-button" type="button" data-action="clear-trip-filters">Rensa</button></form>
+    </details>
     <div class="grid core-metrics">
       <section class="card span-4"><div class="metric">${core.trips.length}</div><div class="metric-label">${real ? 'befintliga resor' : 'testresor'}</div></section>
       <section class="card span-4"><div class="metric">${activeTrips.length}</div><div class="metric-label">${real ? 'pågående resor' : 'aktiva testresor'}</div></section>
